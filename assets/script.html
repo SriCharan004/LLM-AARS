@@ -175,7 +175,11 @@ function renderDiag(){
 // ---------- triangle ----------
 function renderTabs(){
   const t=document.getElementById('tabs'); t.innerHTML='';
-  TRI.forEach(x=>{ const b=document.createElement('button'); b.type='button'; b.role='tab'; b.textContent=x.name; b.setAttribute('aria-selected', state.tri===x.k?'true':'false'); b.onclick=()=>{ state.tri=x.k; renderAll(); }; t.appendChild(b); });
+  [['Losses and counts','cum'],['Ratios and averages','ratio']].forEach(([label,kind])=>{
+    const g=document.createElement('div'); g.className='tabgroup'; const e=document.createElement('span'); e.className='eyebrow'; e.textContent=label; g.appendChild(e);
+    const row=document.createElement('div'); row.className='tabs'; row.setAttribute('role','tablist');
+    TRI.filter(x=>x.kind===kind).forEach(x=>{ const b=document.createElement('button'); b.type='button'; b.setAttribute('role','tab'); b.textContent=x.name; b.setAttribute('aria-selected', state.tri===x.k?'true':'false'); b.onclick=()=>{ state.tri=x.k; renderAll(); }; row.appendChild(b); });
+    g.appendChild(row); t.appendChild(g); });
   const tdef=TD[state.tri];
   document.getElementById('viewFactors').textContent = tdef.kind==='cum'?'Age-to-age factors':'Deviation from column norm';
   document.getElementById('viewFactors').setAttribute('aria-pressed', state.view==='factors');

@@ -122,6 +122,15 @@ table.colsel th:nth-child(3),table.colsel td:nth-child(3){text-align:left;white-
 table.colsel tr.cur td{background:var(--surface-2)}
 table.colsel tfoot td{border-top:2px solid var(--line-strong);border-bottom:0;padding-top:6px}
 table.colsel tfoot tr.selrow td{color:var(--accent)}
+/* top-level sections */
+.wrap > section{display:grid;gap:14px}
+.sec-head h2{font-size:1.15rem}
+.controls{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px 24px;align-items:start}
+@media (max-width:760px){.controls{grid-template-columns:1fr}}
+.tabgroups{display:flex;flex-wrap:wrap;gap:8px 28px}
+.tabgroup{display:grid;gap:5px}
+.tabgroup .eyebrow{font-size:.64rem}
+.chart{max-width:640px}
 /* drill structure */
 .drill > section{padding:20px 22px 22px;gap:16px}
 .sec-head{display:grid;gap:4px;max-width:72ch}
@@ -218,30 +227,25 @@ footer{border-top:1px solid var(--line);padding-top:14px;color:var(--ink-2);font
 </div>
 
 <section style="display:grid;gap:10px">
-  <div class="toolbar">
-    <div><span class="eyebrow">Step ①</span><h2>Diagnostic feed · CY 2025 diagonal</h2></div>
-    <p class="small muted">A cell is flagged when its factor sits outside the column's range, or when the notes carry large offsetting movements the net factor hides.</p>
-  </div>
+  <div class="sec-head"><span class="eyebrow">Step ① · detect</span><h2>Diagnostic feed · CY 2025 diagonal</h2>
+    <p class="small muted">A cell is flagged when its factor sits outside the column's range, or when the notes carry large offsetting movements the net factor hides.</p></div>
   <div class="feed" id="feed"></div>
 </section>
 
 <section style="display:grid;gap:10px">
-  <div class="toolbar">
-    <div><span class="eyebrow">The diagonal test</span><h2>CY 2025 across every triangle</h2></div>
-    <p class="small muted" style="max-width:60ch">An operational change (a new settlement programme, a reserve review) hits every open accident year in the same calendar year, so it shows as a column of deviations down the latest diagonal. A single-year cause shows in one row only. Values are deviations from each column's norm.</p>
-  </div>
+  <div class="sec-head"><span class="eyebrow">Step ① · the diagonal test</span><h2>CY 2025 across every triangle</h2>
+    <p class="small muted">An operational change (a new settlement programme, a reserve review) hits every open accident year in the same calendar year, so it shows as a column of deviations down the latest diagonal. A single-year cause shows in one row only. Values are deviations from each column's norm.</p></div>
   <div class="tri-wrap"><table class="diag" id="diag"></table></div>
 </section>
 
 <section style="display:grid;gap:10px">
-  <div class="toolbar">
-    <div><span class="eyebrow">The instrument</span><h2 id="triTitle">Paid losses</h2></div>
-    <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">
-      <div class="tabs" role="tablist" id="tabs"></div>
-      <div class="seg" role="group" aria-label="View">
-        <button type="button" id="viewFactors" aria-pressed="true">Age-to-age factors</button>
-        <button type="button" id="viewValues" aria-pressed="false">Cumulative values</button>
-      </div>
+  <div class="sec-head"><span class="eyebrow">The instrument</span><h2 id="triTitle">Paid losses</h2>
+    <p class="small muted">Nine triangles rolled up from the same claim list. Losses and counts are read as age-to-age factors; ratios and averages are read down the columns.</p></div>
+  <div class="controls">
+    <div class="tabgroups" id="tabs"></div>
+    <div class="seg" role="group" aria-label="View">
+      <button type="button" id="viewFactors" aria-pressed="true">Age-to-age factors</button>
+      <button type="button" id="viewValues" aria-pressed="false">Cumulative values</button>
     </div>
   </div>
   <div class="tri-wrap"><table class="tri" id="tri"></table></div>
@@ -251,7 +255,7 @@ footer{border-top:1px solid var(--line);padding-top:14px;color:var(--ink-2);font
 <div class="drill" id="drill"></div>
 
 <section style="display:grid;gap:10px">
-  <div><span class="eyebrow">Step ⑥</span><h2>Decision log</h2></div>
+  <div class="sec-head"><span class="eyebrow">Step ⑥ · decide</span><h2>Decision log</h2><p class="small muted">Every cell and column decision recorded on this page, with the figures that were on screen and the rationale given. This is the sign-off record.</p></div>
   <div style="overflow-x:auto"><table class="log" id="log"><thead><tr><th>Cell / column</th><th>Triangle</th><th class="num">Observed / unadj.</th><th class="num">Suggested / adj.</th><th class="num">Carried</th><th>Basis</th><th>Rationale</th></tr></thead><tbody><tr><td colspan="7" class="muted">No decisions recorded yet. Open a cell, review the attribution, and record what you will carry.</td></tr></tbody></table></div>
 </section>
 
