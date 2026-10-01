@@ -350,38 +350,40 @@ function renderDrill(){
       </div>
     </div>
   </section>`;
-  h+=`<section><div class="two"><div style="display:grid;gap:8px"><h3>Same cell across triangles</h3>${crossStrip(i,d)}<p class="small muted">A severity change moves paid and reported together. A timing change moves paid, closed counts and the disposal rate while reported stays flat. A reserve-adequacy change moves reported and average case outstanding while paid stays flat. A reporting change moves reported counts first.</p></div>
-    <div style="display:grid;gap:8px;align-content:start"><h3>Which signature does it match?</h3>${sigTable(i,d,c)}</div></div></section>`;
-  h+=`<section><div class="two"><div style="display:grid;gap:8px"><h3>Decomposition of the factor from the notes</h3>${waterfall(c)}<div class="legend" style="gap:6px 14px">${DKEYS.concat(['residual']).map(k=>`<span class="dchip"><i style="background:var(--d-${k})"></i>${DNAME[k]}</span>`).join('')}</div></div>
-    <div class="reading"><h3>Reading</h3>${reading(c,act,triK)}</div></div></section>`;
+  h+=`<section><div class="sec-head"><span class="eyebrow">Step ② · cross-read</span><h3>What the other triangles say about this cell</h3></div>
+    <div class="two"><div class="stack"><h4>Same cell across triangles</h4>${crossStrip(i,d)}<p class="small muted">A severity change moves paid and reported together. A timing change moves paid, closed counts and the disposal rate while reported stays flat. A reserve-adequacy change moves reported and average case outstanding while paid stays flat. A reporting change moves reported counts first.</p></div>
+    <div class="stack"><h4>Which signature does it match?</h4>${sigTable(i,d,c)}</div></div></section>`;
+  h+=`<section><div class="sec-head"><span class="eyebrow">Step ③ · attribution</span><h3>Where the factor comes from</h3></div>
+    <div class="two"><div class="stack"><h4>Decomposition of the factor from the notes</h4>${waterfall(c)}<div class="legend" style="gap:6px 14px">${DKEYS.concat(['residual']).map(k=>`<span class="dchip"><i style="background:var(--d-${k})"></i>${DNAME[k]}</span>`).join('')}</div></div>
+    <div class="stack reading"><h4>Reading</h4>${reading(c,act,triK)}</div></div></section>`;
   // column selection
   { const cs=columnSel(triK,d); const ckey='col:'+triK+':'+d; const cai=state.ai[ckey]||PRE[ckey];
     const rowsH=cs.rows.map(r=>{ const strip=Object.keys(r.stripped); const cur=r.i===i;
       return `<tr class="${cur?'cur':''}"><td>${r.ay}${cur?' <span class="muted small">(open)</span>':''}</td><td class="num">${r.obs.toFixed(3)}</td><td>${strip.length?strip.map(p=>`<span class="dchip"><i style="background:var(--d-${p})"></i>${DNAME[p]} ${pct(r.stripped[p])}</span>`).join(' '):'<span class="muted small">none</span>'}</td><td class="num"><strong>${r.adj.toFixed(3)}</strong></td><td class="num muted">${money(r.w)}</td></tr>`; }).join('');
-    h+=`<section><div class="toolbar"><div><span class="eyebrow">Step ④ · column selection</span><h3>Selecting the ${DL[d]}→${DL[d+1]} factor for the ${TD[triK].name.toLowerCase()} triangle</h3></div>
-        <p class="small muted" style="max-width:52ch">One factor is carried per column. Each accident year's observed factor is adjusted by removing the one-off movements the notes identified; recurring inflation stays in. The selection is the volume-weighted average of the adjusted factors.</p></div>
-      <div class="two"><div style="overflow-x:auto"><table class="xtri colsel"><thead><tr><th>Acc. year</th><th>Observed</th><th style="text-align:left">Stripped (one-off)</th><th>Adjusted</th><th>Weight</th></tr></thead><tbody>${rowsH}</tbody>
+    h+=`<section><div class="sec-head"><span class="eyebrow">Step ④ · column selection</span><h3>Selecting the ${DL[d]}→${DL[d+1]} factor for the ${TD[triK].name.toLowerCase()} triangle</h3>
+        <p class="small muted">One factor is carried per column. Each accident year's observed factor is adjusted by removing the one-off movements the notes identified; recurring inflation stays in. The selection is the volume-weighted average of the adjusted factors.</p></div>
+      <div class="two"><div class="stack"><h4>Accident years in this column</h4><div style="overflow-x:auto"><table class="xtri colsel"><thead><tr><th>Acc. year</th><th>Observed</th><th style="text-align:left">Stripped (one-off)</th><th>Adjusted</th><th>Weight</th></tr></thead><tbody>${rowsH}</tbody>
         <tfoot><tr><td>Vol-wtd avg, unadjusted</td><td class="num">${cs.unadj.toFixed(3)}</td><td></td><td></td><td></td></tr>
         <tr class="selrow"><td><strong>Vol-wtd avg, adjusted</strong></td><td></td><td class="small muted">${pct((cs.adj-cs.unadj)/cs.unadj)} vs unadjusted</td><td class="num"><strong>${cs.adj.toFixed(3)}</strong></td><td></td></tr>
         <tr><td>Adjusted, last 5 years</td><td></td><td></td><td class="num">${cs.adjLast5==null?'·':cs.adjLast5.toFixed(3)}</td><td></td></tr>
-        <tr><td>Adjusted, simple average</td><td></td><td></td><td class="num">${cs.simpleAdj==null?'·':cs.simpleAdj.toFixed(3)}</td><td></td></tr></tfoot></table></div>
-      <div style="display:grid;gap:10px;align-content:start"><h3 style="font-size:.9rem">From unadjusted average to AARS-adjusted LDF</h3>${columnWaterfall(triK,d,cai&&cai.suggested_ldf?Number(cai.suggested_ldf):null)}<div class="stats"><div class="stat"><span class="eyebrow">Unadjusted</span><span class="v">${cs.unadj.toFixed(3)}</span></div><div class="stat"><span class="eyebrow">AARS-adjusted</span><span class="v sugg">${cs.adj.toFixed(3)}</span></div>${cai&&cai.suggested_ldf?`<div class="stat"><span class="eyebrow">AI recommends</span><span class="v">${Number(cai.suggested_ldf).toFixed(3)}</span></div>`:''}</div>
-        <div class="ai"><div class="ai-bar"><h3 style="font-size:.9rem">AI column memo</h3><div style="display:flex;gap:8px"><button type="button" class="btn ghost" id="colAiBtn">Write column memo</button><button type="button" class="btn quiet" id="colAiStop" hidden>Stop</button></div></div>
+        <tr><td>Adjusted, simple average</td><td></td><td></td><td class="num">${cs.simpleAdj==null?'·':cs.simpleAdj.toFixed(3)}</td><td></td></tr></tfoot></table></div></div>
+      <div class="stack"><h4>From unadjusted average to AARS-adjusted LDF</h4>${columnWaterfall(triK,d,cai&&cai.suggested_ldf?Number(cai.suggested_ldf):null)}<div class="stats"><div class="stat"><span class="eyebrow">Unadjusted</span><span class="v">${cs.unadj.toFixed(3)}</span></div><div class="stat"><span class="eyebrow">AARS-adjusted</span><span class="v sugg">${cs.adj.toFixed(3)}</span></div>${cai&&cai.suggested_ldf?`<div class="stat"><span class="eyebrow">AI recommends</span><span class="v">${Number(cai.suggested_ldf).toFixed(3)}</span></div>`:''}</div></div></div>
+      <div class="two"><div class="stack ai"><div class="ai-bar"><h4>AI column memo</h4><div style="display:flex;gap:8px"><button type="button" class="btn ghost" id="colAiBtn">Write column memo</button><button type="button" class="btn quiet" id="colAiStop" hidden>Stop</button></div></div>
         <div class="ai-out" id="colAiOut">${cai?renderColAI(cai):'<p class="status" id="colAiStatus">Not run yet for this column.</p>'}</div></div>
-        <div class="decision"><fieldset><legend class="eyebrow" style="margin-bottom:6px">Column factor to carry</legend>
+        <div class="stack decision"><h4>Column factor to carry</h4><fieldset>
           <label><input type="radio" name="cbasis" value="adjusted" checked> AARS-adjusted ${cs.adj.toFixed(3)}</label>
           <label><input type="radio" name="cbasis" value="unadjusted"> Unadjusted ${cs.unadj.toFixed(3)}</label>
           ${cai&&cai.suggested_ldf?`<label><input type="radio" name="cbasis" value="ai"> AI recommendation ${Number(cai.suggested_ldf).toFixed(3)}</label>`:''}
           <label><input type="radio" name="cbasis" value="override"> Override <input type="number" step="0.001" id="covr" value="${cs.adj.toFixed(3)}" aria-label="Override column factor"></label></fieldset>
           <textarea id="crationale" placeholder="Rationale for the column selection"></textarea>
           <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap"><button type="button" class="btn" id="crecBtn">Record column selection</button><span class="toast" id="crecToast"></span></div></div>
-      </div></div></section>`; }
-  h+=`<section class="ai"><div class="ai-bar"><div style="display:grid;gap:2px"><h3>Read the notes with AI</h3><p class="small muted">Sends the ${act.reduce((a,x)=>a+x.notes.length,0)} notes dated to this period to Claude, which classifies each one to a driver and writes a short reserving memo. Classifications are then compared with the book's own tags.</p></div>
+      </div></section>`; }
+  h+=`<section class="ai"><div class="ai-bar"><div class="sec-head"><span class="eyebrow">Step ③ · AI reading</span><h3>Read the notes with AI</h3><p class="small muted">Sends the ${act.reduce((a,x)=>a+x.notes.length,0)} notes dated to this period to Claude, which classifies each one to a driver and writes a short reserving memo. Classifications are then compared with the book's own tags.</p></div>
     <div style="display:flex;gap:8px;flex-wrap:wrap"><button type="button" class="btn" id="aiBtn">Read notes</button><button type="button" class="btn quiet" id="aiStop" hidden>Stop</button></div></div>
     <div class="ai-out" id="aiOut">${ai?renderAI(ai,act):'<p class="status" id="aiStatus">Not run yet for this cell.</p>'}</div></section>`;
-  h+=`<section><div class="toolbar"><h3>Claims behind the cell</h3><div class="filters"><label><input type="checkbox" id="fltDrivers" ${state.fltDrivers?'checked':''}> Tagged drivers only</label></div></div><div class="claims" id="claimList"></div></section>`;
+  h+=`<section><div class="toolbar"><div class="sec-head"><span class="eyebrow">Evidence</span><h3>Claims behind the cell</h3></div><div class="filters"><label><input type="checkbox" id="fltDrivers" ${state.fltDrivers?'checked':''}> Tagged drivers only</label></div></div><div class="claims" id="claimList"></div></section>`;
   const prev=state.log.find(l=>l.key===key);
-  h+=`<section><h3>Record the decision</h3><div class="decision">
+  h+=`<section><div class="sec-head"><span class="eyebrow">Step ⑥ · decision</span><h3>Record the cell decision</h3></div><div class="decision">
     <fieldset><legend class="eyebrow" style="margin-bottom:6px">${TD[triK].name} factor to carry for AY ${ay} ${span}</legend>
       <label><input type="radio" name="basis" value="suggested" id="bSugg" checked> Accept suggested ${f4(c.suggested)}</label>
       <label><input type="radio" name="basis" value="observed" id="bObs"> Keep observed ${f4(c.observed)}</label>
