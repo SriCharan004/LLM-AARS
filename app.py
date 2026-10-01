@@ -27,7 +27,10 @@ st.markdown(
       #MainMenu, footer, header[data-testid="stHeader"] {visibility: hidden; height: 0;}
       .block-container {padding: 0 !important; max-width: 100% !important;}
       section[data-testid="stSidebar"] {min-width: 300px;}
-      iframe {border: 0;}
+      /* the page fills the viewport and scrolls inside its own frame */
+      div[data-testid="stAppViewContainer"] > section.main {overflow: hidden;}
+      iframe[title="st.iframe"], div[data-testid="stIFrame"] iframe {border: 0; width: 100% !important; height: 100vh !important; display: block;}
+      div[data-testid="element-container"], div[data-testid="stIFrame"], div[data-testid="stVerticalBlock"] {gap: 0 !important;}
     </style>
     """,
     unsafe_allow_html=True,
@@ -47,7 +50,10 @@ def load_page() -> tuple[str, dict, dict]:
         "<!doctype html><html><head><meta charset='utf-8'>"
         "<meta name='viewport' content='width=device-width,initial-scale=1'>"
         "<style>:root{color-scheme:light}body{margin:0;font:14px system-ui,sans-serif;background:#f7f6f3}"
-        "img{max-width:100%}[hidden]{display:none!important}</style></head><body>" + page + "</body></html>"
+        "img{max-width:100%}[hidden]{display:none!important}"
+        # inside Streamlit the page owns the whole main area: use the full width with even gutters
+        ".wrap{max-width:none!important}body{padding-inline:24px!important}"
+        "</style></head><body>" + page + "</body></html>"
     )
     return html, book, prerun
 
@@ -89,4 +95,4 @@ with st.sidebar:
     st.caption("All claims, notes and amounts are synthetic. The triangle set and the way it is read follow "
                "Friedland, Estimating Unpaid Claims Using Basic Techniques, chapter 6.")
 
-components.html(HTML, height=4400, scrolling=True)
+components.html(HTML, height=1200, scrolling=True)
