@@ -1,0 +1,247 @@
+<title>LLM-AARS Triangle Diagnostics</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=Source+Sans+3:ital,wght@0,400;0,600;1,400&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: a reserving workbench. Diagnostic feed on top, the triangle as the instrument, one cell opened below it like a working paper. */
+:root{
+  --bg:#f7f6f3; --surface:#ffffff; --surface-2:#efede8; --line:#d9d5cc; --line-strong:#b9b3a6;
+  --ink:#1c1b18; --ink-2:#4f4c45; --ink-3:#7d786d;
+  --accent:#0d5c63; --accent-ink:#ffffff; --accent-soft:#dcecec;
+  --spike:#b45309; --spike-soft:#fdebd2; --drop:#1d4ed8; --drop-soft:#dbe6fd; --hidden:#7c2d92; --hidden-soft:#f0def6;
+  --d-inflation:#c2410c; --d-large_loss:#1d4ed8; --d-recovery:#15803d; --d-speedup:#7c3aed; --d-strengthening:#be185d; --d-residual:#8a857a; --d-baseline:#4f4c45;
+  --font-display:"Archivo",system-ui,sans-serif; --font-body:"Source Sans 3",system-ui,sans-serif; --font-mono:"JetBrains Mono",ui-monospace,Menlo,monospace;
+  --radius:4px;
+}
+@media (prefers-color-scheme: dark){ :root:not([data-theme="light"]){
+  --bg:#17181a; --surface:#1f2124; --surface-2:#282b2f; --line:#363a40; --line-strong:#4b5058;
+  --ink:#ecebe6; --ink-2:#b8b5ac; --ink-3:#86837a;
+  --accent:#4fb3b9; --accent-ink:#0f1a1b; --accent-soft:#1d3537;
+  --spike:#f59e0b; --spike-soft:#3b2a0e; --drop:#60a5fa; --drop-soft:#172a4a; --hidden:#c084fc; --hidden-soft:#2f1d3a;
+  --d-inflation:#ea580c; --d-large_loss:#3b82f6; --d-recovery:#16a34a; --d-speedup:#a855f7; --d-strengthening:#ec4899; --d-residual:#8a8f94; --d-baseline:#b8b5ac;
+  color-scheme:dark }}
+:root[data-theme="dark"]{
+  --bg:#17181a; --surface:#1f2124; --surface-2:#282b2f; --line:#363a40; --line-strong:#4b5058;
+  --ink:#ecebe6; --ink-2:#b8b5ac; --ink-3:#86837a;
+  --accent:#4fb3b9; --accent-ink:#0f1a1b; --accent-soft:#1d3537;
+  --spike:#f59e0b; --spike-soft:#3b2a0e; --drop:#60a5fa; --drop-soft:#172a4a; --hidden:#c084fc; --hidden-soft:#2f1d3a;
+  --d-inflation:#ea580c; --d-large_loss:#3b82f6; --d-recovery:#16a34a; --d-speedup:#a855f7; --d-strengthening:#ec4899; --d-residual:#8a8f94; --d-baseline:#b8b5ac;
+  color-scheme:dark }
+
+*{box-sizing:border-box}
+body{background:var(--bg);color:var(--ink);font-family:var(--font-body);font-size:15px;line-height:1.45;padding-inline:16px;padding-block:0 48px}
+.wrap{max-width:1180px;margin:0 auto;display:grid;gap:28px;grid-template-columns:minmax(0,1fr)}
+.wrap>*,.drill>section,.two>*{min-width:0}
+h1,h2,h3{font-family:var(--font-display);text-wrap:balance;margin:0;line-height:1.15}
+h1{font-size:1.65rem;font-weight:700;letter-spacing:-.01em}
+h2{font-size:1.1rem;font-weight:600}
+h3{font-size:.95rem;font-weight:600}
+p{margin:0}
+.eyebrow{font-family:var(--font-display);font-size:.7rem;letter-spacing:.09em;text-transform:uppercase;color:var(--ink-3);font-weight:600}
+.num{font-family:var(--font-mono);font-variant-numeric:tabular-nums;font-size:.86rem}
+.muted{color:var(--ink-2)}
+.small{font-size:.86rem}
+button{font:inherit;cursor:pointer}
+button:focus-visible,[tabindex]:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+/* header */
+header{display:flex;flex-wrap:wrap;gap:12px 28px;align-items:end;justify-content:space-between;padding-block:22px 16px;border-bottom:1px solid var(--line)}
+header .meta{display:flex;flex-wrap:wrap;gap:6px 18px;align-items:baseline}
+.badge{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line-strong);border-radius:999px;padding:2px 10px;font-size:.78rem;color:var(--ink-2);white-space:nowrap}
+.badge i{width:7px;height:7px;border-radius:50%;background:var(--accent);display:inline-block}
+
+/* pipeline strip */
+.pipeline{display:flex;flex-wrap:wrap;gap:6px 0;align-items:center;font-size:.82rem;color:var(--ink-2)}
+.pipeline span{padding:4px 10px;border:1px solid var(--line);border-radius:999px;background:var(--surface);white-space:nowrap}
+.pipeline b{padding:0 6px;color:var(--ink-3);font-weight:400}
+
+/* feed */
+.feed{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:12px 14px;text-align:left;color:inherit;display:grid;gap:6px;border-left-width:4px}
+.card.spike{border-left-color:var(--spike)} .card.drop{border-left-color:var(--drop)} .card.hidden-flag{border-left-color:var(--hidden)}
+.card:hover{border-color:var(--line-strong);border-left-color:inherit}
+.card[aria-pressed="true"]{outline:2px solid var(--accent);outline-offset:-1px}
+.card .cell{font-family:var(--font-display);font-weight:600;font-size:1rem}
+.card .verdict{font-size:.86rem;color:var(--ink-2)}
+.chip{display:inline-flex;align-items:center;gap:5px;font-size:.72rem;font-weight:600;letter-spacing:.04em;text-transform:uppercase;padding:2px 8px;border-radius:3px;font-family:var(--font-display)}
+.chip.spike{background:var(--spike-soft);color:var(--spike)} .chip.drop{background:var(--drop-soft);color:var(--drop)} .chip.hidden-flag{background:var(--hidden-soft);color:var(--hidden)}
+.chip.ok{background:var(--surface-2);color:var(--ink-2)}
+.dchip{display:inline-flex;align-items:center;gap:6px;font-size:.78rem;color:var(--ink-2);white-space:nowrap}
+.dchip i{width:10px;height:10px;border-radius:2px;display:inline-block;flex:none}
+
+/* triangle */
+.toolbar{display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center;justify-content:space-between}
+.tabs{display:flex;flex-wrap:wrap;gap:4px}
+.tabs button{border:1px solid var(--line);background:var(--surface);color:var(--ink-2);padding:6px 12px;border-radius:var(--radius);font-size:.86rem;font-weight:600;font-family:var(--font-display)}
+.tabs button[aria-selected="true"]{background:var(--accent);color:var(--accent-ink);border-color:var(--accent)}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:var(--radius);overflow:hidden}
+.seg button{border:0;background:var(--surface);color:var(--ink-2);padding:6px 12px;font-size:.84rem}
+.seg button[aria-pressed="true"]{background:var(--surface-2);color:var(--ink);font-weight:600}
+.tri-wrap{overflow-x:auto;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius)}
+table.tri{border-collapse:collapse;width:100%;min-width:760px}
+table.tri th,table.tri td{padding:6px 8px;text-align:right;border-bottom:1px solid var(--line);font-family:var(--font-mono);font-variant-numeric:tabular-nums;font-size:.82rem;white-space:nowrap}
+table.tri th{font-family:var(--font-display);font-size:.72rem;letter-spacing:.05em;text-transform:uppercase;color:var(--ink-3);font-weight:600;background:var(--surface-2);position:sticky;top:env(safe-area-inset-top,0px)}
+table.tri th:first-child,table.tri td:first-child{text-align:left;position:sticky;left:0;background:var(--surface);color:var(--ink-2)}
+table.tri th:first-child{background:var(--surface-2)}
+table.tri td.empty{color:var(--line-strong)}
+table.tri td.f{cursor:pointer;position:relative}
+table.tri td.f:hover{background:var(--surface-2)}
+table.tri td.f.spike{box-shadow:inset 3px 0 0 var(--spike);background:color-mix(in srgb,var(--spike-soft) 55%,transparent)}
+table.tri td.f.drop{box-shadow:inset 3px 0 0 var(--drop);background:color-mix(in srgb,var(--drop-soft) 55%,transparent)}
+table.tri td.f.hidden-flag{box-shadow:inset 3px 0 0 var(--hidden);background:color-mix(in srgb,var(--hidden-soft) 55%,transparent)}
+table.tri td.f.sel{outline:2px solid var(--accent);outline-offset:-2px;font-weight:500}
+table.tri td.latest{border-right:2px solid var(--line-strong)}
+table.tri tr.avg td{border-top:2px solid var(--line-strong);color:var(--ink-2);font-style:italic}
+.legend{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:.8rem;color:var(--ink-2);align-items:center}
+.legend i{display:inline-block;width:12px;height:12px;border-radius:2px;vertical-align:-2px;margin-right:5px;border-left:3px solid}
+.legend i.spike{border-color:var(--spike);background:var(--spike-soft)} .legend i.drop{border-color:var(--drop);background:var(--drop-soft)} .legend i.hidden-flag{border-color:var(--hidden);background:var(--hidden-soft)}
+
+/* diagonal test */
+table.diag{border-collapse:collapse;width:100%;min-width:640px}
+table.diag th,table.diag td{padding:6px 8px;border-bottom:1px solid var(--line);text-align:right;font-family:var(--font-mono);font-variant-numeric:tabular-nums;font-size:.8rem;white-space:nowrap}
+table.diag th{font-family:var(--font-display);font-size:.7rem;letter-spacing:.05em;text-transform:uppercase;color:var(--ink-3);font-weight:600;background:var(--surface-2)}
+table.diag th:first-child,table.diag td:first-child{text-align:left}
+table.diag td.c{cursor:pointer}
+table.diag td.c:hover{outline:2px solid var(--accent);outline-offset:-2px}
+table.diag td.up{background:color-mix(in srgb,var(--spike-soft) 70%,transparent);color:var(--spike)}
+table.diag td.dn{background:color-mix(in srgb,var(--drop-soft) 70%,transparent);color:var(--drop)}
+table.diag td.na{color:var(--line-strong)}
+/* signature */
+table.sig{border-collapse:collapse;width:100%;font-size:.82rem;min-width:420px}
+table.sig th,table.sig td{padding:5px 4px;border-bottom:1px solid var(--line);text-align:center}
+table.sig th{font-family:var(--font-display);font-size:.62rem;letter-spacing:.04em;text-transform:uppercase;color:var(--ink-3);font-weight:600;line-height:1.2}
+table.sig th:first-child,table.sig td:first-child{text-align:left;white-space:normal}
+table.sig tr.obs td{background:var(--surface-2);font-weight:600}
+table.sig tr.best td{background:var(--accent-soft)}
+table.sig td.hit{color:var(--ink)} table.sig td.miss{color:var(--ink-3)}
+table.sig .arrow{font-family:var(--font-mono);font-size:.9rem}
+details.sigkey summary{cursor:pointer;color:var(--accent);font-size:.84rem;font-weight:600;font-family:var(--font-display)}
+details.sigkey ul{padding-left:18px;margin:0;display:grid;gap:4px}
+details.sigkey .arrow{display:inline-block;min-width:1.2em;text-align:center}
+/* drill */
+.drill{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);display:grid;gap:0}
+.drill > section{padding:18px 20px;border-top:1px solid var(--line);display:grid;gap:12px}
+.drill > section:first-child{border-top:0}
+.drill-head{display:flex;flex-wrap:wrap;gap:10px 24px;align-items:end;justify-content:space-between}
+.stats{display:flex;flex-wrap:wrap;gap:10px 28px}
+.stat{display:grid;gap:2px}
+.stat .v{font-family:var(--font-mono);font-size:1.35rem;font-variant-numeric:tabular-nums;line-height:1.1}
+.stat .v.sugg{color:var(--accent)}
+.two{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(0,1fr);gap:20px}
+@media (max-width:760px){.two{grid-template-columns:1fr}}
+.chart{width:100%;height:auto;display:block}
+.xtri{width:100%;border-collapse:collapse;font-size:.86rem}
+.xtri th,.xtri td{padding:5px 6px;border-bottom:1px solid var(--line);text-align:right;font-family:var(--font-mono);font-variant-numeric:tabular-nums;font-size:.82rem}
+.xtri th{font-family:var(--font-display);text-transform:uppercase;letter-spacing:.05em;font-size:.7rem;color:var(--ink-3);text-align:right}
+.xtri th:first-child,.xtri td:first-child{text-align:left;font-family:var(--font-body);font-size:.86rem}
+.xtri td.up{color:var(--spike)} .xtri td.down{color:var(--drop)}
+.reading{display:grid;gap:8px;max-width:68ch}
+.reading li{margin:0}
+.reading ul{margin:0;padding-left:18px;display:grid;gap:4px}
+
+/* AI panel */
+.ai{display:grid;gap:12px}
+.ai-bar{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:center}
+.btn{border:1px solid var(--accent);background:var(--accent);color:var(--accent-ink);padding:8px 14px;border-radius:var(--radius);font-weight:600;font-family:var(--font-display);font-size:.86rem}
+.btn[disabled]{opacity:.55;cursor:default}
+.btn.ghost{background:transparent;color:var(--accent)}
+.btn.quiet{background:var(--surface-2);border-color:var(--line);color:var(--ink)}
+.ai-out{background:var(--surface-2);border:1px solid var(--line);border-radius:var(--radius);padding:14px 16px;display:grid;gap:10px;min-height:60px}
+.ai-out pre{white-space:pre-wrap;font-family:var(--font-body);font-size:.92rem;margin:0;max-width:72ch}
+.agree{display:flex;flex-wrap:wrap;gap:8px 20px;align-items:center}
+.meter{height:6px;background:var(--line);border-radius:3px;overflow:hidden;width:160px}
+.meter i{display:block;height:100%;background:var(--accent)}
+.status{font-size:.82rem;color:var(--ink-3)}
+
+/* claims */
+.claims{display:grid;gap:0;border:1px solid var(--line);border-radius:var(--radius);overflow:hidden}
+.claim{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:2px 12px;padding:9px 12px;border-top:1px solid var(--line);background:var(--surface)}
+.claim:first-child{border-top:0}
+.claim .l1{display:flex;flex-wrap:wrap;gap:4px 10px;align-items:center;min-width:0}
+.claim .id{font-family:var(--font-mono);font-size:.82rem}
+.claim .amt{font-family:var(--font-mono);font-size:.84rem;text-align:right;font-variant-numeric:tabular-nums}
+.claim .note{grid-column:1/-1;color:var(--ink-2);font-size:.88rem;max-width:80ch}
+.claim .note.ai{color:var(--ink);border-left:2px solid var(--accent);padding-left:8px;font-size:.84rem}
+.claim details summary{cursor:pointer;color:var(--accent);font-size:.82rem}
+.claim .tag{font-size:.7rem;letter-spacing:.05em;text-transform:uppercase;font-weight:600;padding:1px 7px;border-radius:3px;font-family:var(--font-display);color:#fff}
+.claim .tag.routine{background:var(--surface-2);color:var(--ink-2)}
+.filters{display:flex;flex-wrap:wrap;gap:8px;align-items:center;font-size:.84rem;color:var(--ink-2)}
+.filters label{display:inline-flex;gap:4px;align-items:center}
+
+/* decision */
+.decision{display:grid;gap:12px;max-width:72ch}
+.decision fieldset{border:0;padding:0;margin:0;display:flex;flex-wrap:wrap;gap:8px 18px}
+.decision label{display:inline-flex;gap:6px;align-items:center}
+.decision input[type=number]{width:90px;font:inherit;font-family:var(--font-mono);padding:4px 6px;border:1px solid var(--line-strong);border-radius:3px;background:var(--surface);color:var(--ink)}
+.decision textarea{width:100%;min-height:64px;font:inherit;padding:8px;border:1px solid var(--line-strong);border-radius:3px;background:var(--surface);color:var(--ink);resize:vertical}
+table.log{width:100%;min-width:640px;border-collapse:collapse;font-size:.86rem}
+table.log th,table.log td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line);vertical-align:top}
+table.log th{font-family:var(--font-display);font-size:.7rem;letter-spacing:.05em;text-transform:uppercase;color:var(--ink-3)}
+table.log td.num{text-align:right}
+.toast{font-size:.84rem;color:var(--accent)}
+footer{border-top:1px solid var(--line);padding-top:14px;color:var(--ink-2);font-size:.86rem;display:grid;gap:8px;max-width:80ch}
+@media (prefers-reduced-motion:no-preference){.card,.tabs button{transition:border-color .15s,background .15s}}
+</style>
+
+<div class="wrap">
+<header>
+  <div style="display:grid;gap:6px">
+    <span class="eyebrow">LLM-AARS · Augmented Actuarial Reserving · prototype</span>
+    <h1>Triangle Diagnostics</h1>
+    <p class="muted" style="max-width:70ch">Every triangle here is rolled up from the same claim list. Open a development cell and the system reads the adjuster notes behind it, attributes the movement to named drivers, and proposes the factor an actuary should carry.</p>
+  </div>
+  <div class="meta">
+    <span class="badge"><i></i>Commercial Auto Liability</span>
+    <span class="badge">Valued 31 Dec 2025</span>
+    <span class="badge" id="claimCount"></span>
+    <span class="badge" title="All claims, notes and amounts are synthetic, seeded for demonstration">Synthetic book</span>
+  </div>
+</header>
+
+<div class="pipeline" aria-label="Agentic flow">
+  <span>① Anomaly detected</span><b>→</b><span>② Notes read</span><b>→</b><span>③ Root cause attributed</span><b>→</b><span>④ LDF suggested</span><b>→</b><span>⑤ Decomposition shown</span><b>→</b><span>⑥ Actuary decides</span>
+</div>
+
+<section style="display:grid;gap:10px">
+  <div class="toolbar">
+    <div><span class="eyebrow">Step ①</span><h2>Diagnostic feed · CY 2025 diagonal</h2></div>
+    <p class="small muted">A cell is flagged when its factor sits outside the column's range, or when the notes carry large offsetting movements the net factor hides.</p>
+  </div>
+  <div class="feed" id="feed"></div>
+</section>
+
+<section style="display:grid;gap:10px">
+  <div class="toolbar">
+    <div><span class="eyebrow">The diagonal test</span><h2>CY 2025 across every triangle</h2></div>
+    <p class="small muted" style="max-width:60ch">An operational change (a new settlement programme, a reserve review) hits every open accident year in the same calendar year, so it shows as a column of deviations down the latest diagonal. A single-year cause shows in one row only. Values are deviations from each column's norm.</p>
+  </div>
+  <div class="tri-wrap"><table class="diag" id="diag"></table></div>
+</section>
+
+<section style="display:grid;gap:10px">
+  <div class="toolbar">
+    <div><span class="eyebrow">The instrument</span><h2 id="triTitle">Paid losses</h2></div>
+    <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center">
+      <div class="tabs" role="tablist" id="tabs"></div>
+      <div class="seg" role="group" aria-label="View">
+        <button type="button" id="viewFactors" aria-pressed="true">Age-to-age factors</button>
+        <button type="button" id="viewValues" aria-pressed="false">Cumulative values</button>
+      </div>
+    </div>
+  </div>
+  <div class="tri-wrap"><table class="tri" id="tri"></table></div>
+  <div class="legend"><span><i class="spike"></i>Spike vs column</span><span><i class="drop"></i>Drop vs column</span><span><i class="hidden-flag"></i>Hidden volatility</span><span class="muted">Click any factor to open the cell. Bottom row: volume-weighted average of all accident years.</span></div>
+</section>
+
+<div class="drill" id="drill"></div>
+
+<section style="display:grid;gap:10px">
+  <div><span class="eyebrow">Step ⑥</span><h2>Decision log</h2></div>
+  <div style="overflow-x:auto"><table class="log" id="log"><thead><tr><th>Cell</th><th>Triangle</th><th class="num">Observed</th><th class="num">Suggested</th><th class="num">Carried</th><th>Basis</th><th>Rationale</th></tr></thead><tbody><tr><td colspan="7" class="muted">No decisions recorded yet. Open a cell, review the attribution, and record what you will carry.</td></tr></tbody></table></div>
+</section>
+
+<footer>
+  <strong>How the attribution works.</strong>
+  <p>For each cell the baseline is the volume-weighted average factor of the other accident years in the same column. Each adjuster note is classified to a driver, and the paid or incurred movement that note explains is divided by the cell's opening value, giving an additive contribution to the factor. Baseline plus contributions plus an unexplained residual equals the observed factor exactly, so the decomposition can be audited line by line. The suggested factor carries the baseline and any recurring driver (inflation) and strips one-off movements (large losses, recoveries, settlement timing). The original proposal describes a SHAP layer; this prototype uses the additive attribution above because SHAP explains a numeric model's output, not a language model's reading of text. Driver tags on the claims are the ground truth the book was generated with; the AI reading is a live classification you can compare against them.</p>
+  <p>The triangle set and the way they are read follow Friedland, <em>Estimating Unpaid Claims Using Basic Techniques</em>, chapter 6: paid and reported losses, reported and closed counts, the paid-to-reported ratio, the closed-to-reported (disposal) ratio, and the three averages. Friedland's warning that a stable paid-to-reported ratio does not mean nothing is changing is the hidden-volatility case here. This is a synthetic Commercial Auto Liability book of around 740 claims with annual development, generated so that the CY 2025 diagonal contains four known effects: hidden volatility in AY 2021, a spike in AY 2022 that is mostly inflation and partly one large verdict, a spike in AY 2023 that is settlement timing only, and a case-reserve adequacy review that lifts reported losses in AY 2020 and AY 2024 without touching paid.</p>
+</footer>
+</div>
+

@@ -1,0 +1,424 @@
+<script id="book" type="application/json">__BOOK__</script>
+<script id="prerun" type="application/json">__PRERUN__</script>
+<script>
+(function(){
+const B = JSON.parse(document.getElementById('book').textContent);
+const AYS = B.meta.ays, NDEV = B.meta.ndev, DL = B.meta.devLabels, DRV = B.meta.drivers;
+B.claims.forEach(c=>{ c.incurred=c.paid.map((p,j)=>p+(c.case[j]||0)); });
+const CL = Object.fromEntries(B.claims.map(c=>[c.id,c]));
+document.getElementById('claimCount').textContent = B.claims.length + ' claims · ' + B.claims.reduce((a,c)=>a+c.notes.length,0) + ' adjuster notes';
+
+// derived ratio triangles (Friedland ch. 6)
+const T = B.triangles;
+const mk = f => AYS.map((ay,i)=>T.paid[i].map((v,d)=>v==null?null:f(i,d)));
+const sdiv=(a,b)=>b?a/b:null;
+T.p2r = mk((i,d)=>sdiv(T.paid[i][d],T.incurred[i][d]));
+T.disposal = mk((i,d)=>sdiv(T.closed[i][d],T.reported[i][d]));
+T.avgpaid = mk((i,d)=>sdiv(T.paid[i][d],T.closed[i][d]));
+
+const TRI = [
+  {k:'paid', name:'Paid losses', fmt:money, kind:'cum', dec:true},
+  {k:'incurred', name:'Reported losses', note:'paid + case outstanding', fmt:money, kind:'cum', dec:true},
+  {k:'reported', name:'Reported counts', fmt:int, kind:'cum'},
+  {k:'closed', name:'Closed counts', fmt:int, kind:'cum'},
+  {k:'p2r', name:'Paid ÷ reported', note:'settlement speed vs case adequacy', fmt:ratio, kind:'ratio'},
+  {k:'disposal', name:'Closed ÷ reported counts', note:'disposal rate', fmt:ratio, kind:'ratio'},
+  {k:'avgpaid', name:'Average paid', note:'paid ÷ closed counts', fmt:money, kind:'ratio'},
+  {k:'severity', name:'Average reported', note:'reported ÷ reported counts', fmt:money, kind:'ratio'},
+  {k:'avgcase', name:'Average case O/S', note:'case ÷ open counts', fmt:money, kind:'ratio'},
+];
+const TD = Object.fromEntries(TRI.map(t=>[t.k,t]));
+function money(v){ return v==null?'':'$'+(Math.abs(v)>=1e6?(v/1e6).toFixed(2)+'M':Math.round(v/1000).toLocaleString()+'k'); }
+function moneyFull(v){ return (v<0?'−':'')+'$'+Math.abs(Math.round(v)).toLocaleString(); }
+function int(v){ return v==null?'':String(v); }
+function ratio(v){ return v==null?'':v.toFixed(3); }
+function f4(v){ return v==null?'':v.toFixed(3); }
+function pct(v){ return (v>=0?'+':'−')+(Math.abs(v)*100).toFixed(1)+'%'; }
+const DNAME = {inflation:'Emerging inflation', large_loss:'Large-loss outlier', recovery:'One-time recovery', speedup:'Settlement speed-up', strengthening:'Case reserve strengthening', residual:'Unexplained residual', routine:'Routine'};
+const DKEYS = ['inflation','large_loss','recovery','speedup','strengthening'];
+const FLAGNAME = {spike:'Spike', drop:'Drop', hidden:'Hidden volatility'};
+function flagClass(f){ return f==='hidden'?'hidden-flag':(f||''); }
+
+const PRE = JSON.parse(document.getElementById('prerun').textContent||'{}');
+let state = { tri:'paid', view:'factors', sel:null, ai:{}, log:[] };
+try{ const s=localStorage.getItem('aars-log'); if(s) state.log=JSON.parse(s);}catch(e){}
+
+// ---------- lookups ----------
+function factorOf(k, i, d){ const r=T[k][i]; if(r[d+1]==null||!r[d]) return null; return r[d+1]/r[d]; }
+function baselineOf(k, i, d){ let n=0,m=0; T[k].forEach((r,j)=>{ if(j===i||r[d+1]==null||!r[d]) return; n+=r[d+1]; m+=r[d]; }); return m?n/m:null; }
+// level of a ratio triangle at age d vs the simple mean of other AYs at the same age
+function levelNorm(k, i, d){ const xs=[]; T[k].forEach((r,j)=>{ if(j!==i&&r[d]!=null) xs.push(r[d]); }); return xs.length?xs.reduce((a,b)=>a+b,0)/xs.length:null; }
+function cellInfo(k,i,d){
+  const key=AYS[i]+'-'+d;
+  if(B.cells[k] && B.cells[k][key]){ const c=B.cells[k][key]; const parts={}; Object.keys(c.parts).forEach(p=>{ if(Math.abs(c.parts[p])>1e-6) parts[p]=c.parts[p]; }); return Object.assign({},c,{parts}); }
+  const obs=factorOf(k,i,d); if(obs==null) return null;
+  const base=baselineOf(k,i,d)??obs;
+  return {ay:AYS[i],dev:d,observed:obs,baseline:base,parts:{},residual:obs-base,suggested:base,gross:0,flag:null,claims:[],movers:[],derived:true};
+}
+// signals for a cell (i,d): development d->d+1
+function signals(i,d){
+  const dev=(k)=>{ const f=factorOf(k,i,d), b=baselineOf(k,i,d); return (f==null||b==null)?null:(f-b)/b; };
+  const lvl=(k)=>{ const v=T[k][i][d+1], n=levelNorm(k,i,d+1); return (v==null||n==null||!n)?null:(v-n)/n; };
+  const o=T.open[i]; const fewOpen=(o[d+1]??0)<15;
+  return { paid:dev('paid'), rep:dev('incurred'), cnt:dev('reported'), closed:dev('closed'), disp:lvl('disposal'), p2r:lvl('p2r'), avgcase:fewOpen?null:lvl('avgcase'), avgpaid:lvl('avgpaid') };
+}
+const SIGCOLS=[['paid','Paid'],['rep','Reported'],['cnt','Rep. counts'],['closed','Closed counts'],['p2r','Paid ÷ rep.'],['avgcase','Avg case O/S']];
+function dir(v,th){ if(v==null) return '·'; return v>th?'↑':v<-th?'↓':'→'; }
+const SIGS=[
+  {name:'Severity change: inflation', exp:{paid:'↑',rep:'↑',cnt:'→',closed:'→'}, read:'Costs per claim are rising across many files. Recurring; carry it.'},
+  {name:'Severity change: large loss', exp:{paid:'↑',rep:'↑',cnt:'→',closed:'→'}, conc:true, read:'The same shape as inflation, but one or two files carry most of the excess. One-off; treat separately.'},
+  {name:'Settlement speed-up', exp:{paid:'↑',rep:'→',closed:'↑',p2r:'↑'}, read:'Money moves earlier, totals do not. Revise the payment pattern, not the ultimate.'},
+  {name:'Case reserve strengthening', exp:{paid:'→',rep:'↑',closed:'→',p2r:'↓',avgcase:'↑'}, read:'Reported rises with no paid movement. Restate history to the new adequacy basis (Berquist-Sherman) before using the reported method.'},
+  {name:'Reporting change / frequency', exp:{cnt:'↑',rep:'↑'}, read:'More claims, not costlier claims. Check exposure and reporting lag.'},
+  {name:'Nothing visible: offsetting or random', exp:{paid:'→',rep:'→',cnt:'→',closed:'→'}, read:'The triangles are quiet. Only the claim notes can say whether that quiet is real.'},
+];
+function matchSig(sig, c){
+  const obs={}; SIGCOLS.forEach(([k])=>obs[k]=dir(sig[k], k==='paid'||k==='rep'?0.05:0.08));
+  let best=null;
+  const scored=SIGS.map(s=>{ let hit=0,n=0; Object.keys(s.exp).forEach(k=>{ if(obs[k]==='·') return; n++; if(obs[k]===s.exp[k]) hit++; });
+    let score=n?hit/n:0;
+    if(s.conc){ const top=c.movers&&c.movers.length&&c.incr?Math.abs(c.movers[0].amt)/Math.abs(c.incr):0; if(top<0.35) score*=0.6; }
+    else if(s.name.startsWith('Severity change: inflation')){ const top=c.movers&&c.movers.length&&c.incr?Math.abs(c.movers[0].amt)/Math.abs(c.incr):0; if(top>=0.35) score*=0.6; }
+    return {s,hit,n,score}; });
+  scored.forEach(x=>{ if(!best||x.score>best.score) best=x; });
+  return {obs,scored,best};
+}
+
+// ---------- feed ----------
+function verdict(c, tri){
+  const p=c.parts, keys=Object.keys(p);
+  if(c.flag==='hidden') return `Net factor looks stable (${f4(c.observed)} vs ${f4(c.baseline)}) but notes carry ${pct(p.inflation||0)} inflation against ${pct(p.recovery||0)} recovery. Gross movement ${(c.gross*100).toFixed(0)}%.`;
+  if(!keys.length) return `No driver found in the notes. Movement is concentrated in a few claims; treat as random variation unless the pattern repeats.`;
+  const tot=keys.reduce((a,k)=>a+Math.abs(p[k]),0);
+  const parts=keys.sort((a,b)=>Math.abs(p[b])-Math.abs(p[a])).map(k=>`${Math.round(Math.abs(p[k])/tot*100)}% ${DNAME[k].toLowerCase()}`).join(' + ');
+  let extra=''; if(p.speedup&&!p.inflation) extra=' Reported unchanged.'; else if(p.speedup) extra=' Reported barely moves.'; else if(p.strengthening) extra=' Paid unchanged.';
+  return `${f4(c.observed)} against a column norm of ${f4(c.baseline)}: ${parts}.${extra}`;
+}
+function renderFeed(){
+  const el=document.getElementById('feed'); el.innerHTML='';
+  const items=[];
+  AYS.forEach((ay,i)=>{ const nd=2025-ay+1; if(nd<2) return; const d=nd-2;
+    const cp=B.cells.paid[ay+'-'+d]; if(cp&&cp.flag) items.push({c:cp,tri:'paid'});
+    const ci=B.cells.incurred[ay+'-'+d]; if(ci&&ci.flag&&Object.keys(ci.parts).some(k=>Math.abs(ci.parts[k])>1e-6)&&!(cp&&cp.flag)) items.push({c:ci,tri:'incurred'}); });
+  items.sort((a,b)=>b.c.ay-a.c.ay);
+  items.forEach(({c,tri})=>{
+    const cc=cellInfo(tri,AYS.indexOf(c.ay),c.dev);
+    const b=document.createElement('button'); b.type='button'; b.className='card '+flagClass(c.flag);
+    b.setAttribute('aria-pressed', state.sel&&state.sel.i===AYS.indexOf(c.ay)&&state.sel.d===c.dev&&state.tri===tri ? 'true':'false');
+    b.innerHTML=`<div style="display:flex;justify-content:space-between;gap:8px;align-items:center"><span class="cell">AY ${c.ay} · ${DL[c.dev]}→${DL[c.dev+1]} mo</span><span class="chip ${flagClass(c.flag)}">${FLAGNAME[c.flag]}</span></div>
+      <div class="num">${f4(c.observed)} <span class="muted">vs ${f4(c.baseline)} · ${TD[tri].name.toLowerCase()} · z ${Math.abs(c.z)>10?(c.z>0?'> +10':'< −10'):(c.z>=0?'+':'')+c.z}</span></div>
+      <div class="verdict">${verdict(cc,tri)}</div>`;
+    b.onclick=()=>{ state.tri=tri; select(AYS.indexOf(c.ay), c.dev); };
+    el.appendChild(b);
+  });
+}
+
+// ---------- diagonal test ----------
+function renderDiag(){
+  const cols=[['paid','Paid factor','dev'],['incurred','Reported factor','dev'],['closed','Closed-count factor','dev'],['reported','Rep.-count factor','dev'],['p2r','Paid ÷ reported','lvl'],['disposal','Disposal rate','lvl'],['avgcase','Avg case O/S','lvl']];
+  let h='<thead><tr><th>Acc. year</th><th>Period</th>'+cols.map(c=>`<th>${c[1]}</th>`).join('')+'</tr></thead><tbody>';
+  AYS.slice().reverse().forEach(ay=>{ const i=AYS.indexOf(ay); const nd=2025-ay+1; if(nd<2) return; const d=nd-2; const sg=signals(i,d);
+    h+=`<tr><td>${ay}</td><td class="muted">${DL[d]}→${DL[d+1]}</td>`;
+    cols.forEach(([k,,m])=>{ let v; if(m==='dev'){ const f=factorOf(k,i,d), b=baselineOf(k,i,d); v=(f==null||b==null)?null:(f-b)/b; } else { v=k==='avgcase'?sg.avgcase:(()=>{ const x=T[k][i][d+1], n=levelNorm(k,i,d+1); return (x==null||!n)?null:(x-n)/n; })(); }
+      if(v==null){ h+='<td class="na">·</td>'; return; }
+      const th=(k==='paid'||k==='incurred')?0.05:0.08; const cls=v>th?'up':v<-th?'dn':'';
+      const tri=(k==='incurred')?'incurred':(k==='paid'?'paid':(['closed','reported'].includes(k)?k:'paid'));
+      h+=`<td class="c ${cls}" data-i="${i}" data-d="${d}" data-t="${tri}" title="Open AY ${ay} ${DL[d]}→${DL[d+1]} on the ${TD[tri].name.toLowerCase()} triangle">${pct(v)}</td>`; });
+    h+='</tr>'; });
+  const tbl=document.getElementById('diag'); tbl.innerHTML=h+'</tbody>';
+  tbl.querySelectorAll('td.c').forEach(td=>td.onclick=()=>{ state.tri=td.dataset.t; select(+td.dataset.i,+td.dataset.d); });
+}
+
+// ---------- triangle ----------
+function renderTabs(){
+  const t=document.getElementById('tabs'); t.innerHTML='';
+  TRI.forEach(x=>{ const b=document.createElement('button'); b.type='button'; b.role='tab'; b.textContent=x.name; b.setAttribute('aria-selected', state.tri===x.k?'true':'false'); b.onclick=()=>{ state.tri=x.k; renderAll(); }; t.appendChild(b); });
+  const tdef=TD[state.tri];
+  document.getElementById('viewFactors').textContent = tdef.kind==='cum'?'Age-to-age factors':'Deviation from column norm';
+  document.getElementById('viewFactors').setAttribute('aria-pressed', state.view==='factors');
+  document.getElementById('viewValues').setAttribute('aria-pressed', state.view==='values');
+  document.getElementById('triTitle').textContent = tdef.name + (tdef.note?' · '+tdef.note:'');
+}
+function renderTri(){
+  const tdef=TD[state.tri], M=T[state.tri];
+  const tbl=document.getElementById('tri'); let h='';
+  if(state.view==='factors' && tdef.kind==='cum'){
+    h+='<thead><tr><th>Acc. year</th>'+DL.slice(0,-1).map((l,d)=>`<th>${l}→${DL[d+1]}</th>`).join('')+'</tr></thead><tbody>';
+    AYS.forEach((ay,i)=>{
+      h+=`<tr><td>${ay}</td>`;
+      for(let d=0;d<NDEV-1;d++){
+        const f=factorOf(state.tri,i,d);
+        if(f==null){ h+='<td class="empty">·</td>'; continue; }
+        const c=cellInfo(state.tri,i,d); const latest=(2025-ay+1-2===d);
+        const cls=['f', c&&c.flag?flagClass(c.flag):'', state.sel&&state.sel.i===i&&state.sel.d===d?'sel':'', latest?'latest':''].join(' ');
+        h+=`<td class="${cls}" data-i="${i}" data-d="${d}" tabindex="0" title="AY ${ay}, ${DL[d]}→${DL[d+1]} months">${f.toFixed(3)}</td>`;
+      }
+      h+='</tr>';
+    });
+    h+='<tr class="avg"><td>Vol-wtd avg</td>'; for(let d=0;d<NDEV-1;d++){ let n=0,m=0; M.forEach(r=>{ if(r[d+1]!=null&&r[d]){n+=r[d+1];m+=r[d];}}); h+=`<td>${m?(n/m).toFixed(3):'·'}</td>`; } h+='</tr></tbody>';
+  } else if(state.view==='factors'){
+    // ratio triangle: deviation of each cell from the mean of other AYs at the same age (read down the columns)
+    h+='<thead><tr><th>Acc. year</th>'+DL.map(l=>`<th>${l} mo</th>`).join('')+'</tr></thead><tbody>';
+    AYS.forEach((ay,i)=>{ h+=`<tr><td>${ay}</td>`; M[i].forEach((v,d)=>{ if(v==null){ h+='<td class="empty">·</td>'; return; } if(state.tri==='avgcase'&&(T.open[i][d]??0)<15){ h+=`<td class="empty" title="${T.open[i][d]} open claims: too few for a reliable average">few</td>`; return; } const n=levelNorm(state.tri,i,d); const dv=n?(v-n)/n:0; const latest=(d===2025-ay); const sel=state.sel&&state.sel.i===i&&state.sel.d===d-1; const cls=['f', Math.abs(dv)>0.08?(dv>0?'spike':'drop'):'', sel?'sel':'', latest?'latest':''].join(' '); h+=`<td class="${cls}" data-i="${i}" data-d="${d-1}" tabindex="0" title="${tdef.fmt(v)} vs ${tdef.fmt(n)} norm">${pct(dv)}</td>`; }); h+='</tr>'; });
+    h+='<tr class="avg"><td>Column mean</td>'; for(let d=0;d<NDEV;d++){ const xs=M.map(r=>r[d]).filter(x=>x!=null); h+=`<td>${xs.length?tdef.fmt(xs.reduce((a,b)=>a+b,0)/xs.length):'·'}</td>`; } h+='</tr></tbody>';
+  } else {
+    h+='<thead><tr><th>Acc. year</th>'+DL.map(l=>`<th>${l} mo</th>`).join('')+'</tr></thead><tbody>';
+    AYS.forEach((ay,i)=>{ h+=`<tr><td>${ay}</td>`+M[i].map((v,d)=>v==null?'<td class="empty">·</td>':`<td class="${d===2025-ay?'latest':''}">${tdef.fmt(v)}</td>`).join('')+'</tr>'; });
+    h+='</tbody>';
+  }
+  tbl.innerHTML=h;
+  tbl.querySelectorAll('td.f').forEach(td=>{ const go=()=>{ const d=+td.dataset.d; if(d<0) return; select(+td.dataset.i,d); }; td.onclick=go; td.onkeydown=e=>{ if(e.key==='Enter'||e.key===' '){e.preventDefault();go();} }; });
+  const lg=document.querySelector('.legend .muted'); if(lg) lg.textContent = tdef.kind==='cum' ? 'Click any factor to open the cell. Bottom row: volume-weighted average of all accident years.' : 'Ratio triangles are read down the columns (same age, successive accident years) and along the latest diagonal. Click a cell to open the development into that age.';
+}
+
+// ---------- drill ----------
+function select(i,d){ state.sel={i,d}; renderAll(); document.getElementById('drill').scrollIntoView({behavior:'smooth',block:'start'}); }
+function activeClaims(i,d,tri){
+  const ay=AYS[i]; const k=(tri==='incurred')?'incurred':'paid';
+  return B.claims.filter(c=>c.ay===ay).map(c=>{
+    const inc=(c[k][d+1]??0)-(c[k][d]??0);
+    const ev=c.events.filter(e=>e.dev===d+1);
+    const notes=c.notes.filter(n=>n.dev===d+1);
+    const driver=ev.length?ev[0].driver:'routine';
+    const reported=c.r===d+1, closed=c.c===d+1;
+    return {c,inc,driver,notes,reported,closed};
+  }).filter(x=>x.inc!==0||x.notes.length||x.reported||x.closed).sort((a,b)=>Math.abs(b.inc)-Math.abs(a.inc));
+}
+function waterfall(c){
+  const steps=[{k:'baseline',label:'Column baseline',v:c.baseline,abs:true}];
+  Object.keys(c.parts).sort((a,b)=>Math.abs(c.parts[b])-Math.abs(c.parts[a])).forEach(k=>steps.push({k,label:DNAME[k],v:c.parts[k]}));
+  steps.push({k:'residual',label:'Residual',v:c.residual});
+  steps.push({k:'observed',label:'Observed factor',v:c.observed,abs:true});
+  const W=560,H=40+steps.length*34+36, L=190,R=80, pw=W-L-R;
+  let lo=Math.min(c.baseline,c.observed,c.suggested), hi=Math.max(c.baseline,c.observed,c.suggested), run=c.baseline;
+  steps.slice(1,-1).forEach(s=>{ run+=s.v; lo=Math.min(lo,run); hi=Math.max(hi,run); });
+  const pad=(hi-lo)*0.15||0.02; lo-=pad; hi+=pad;
+  const x=v=>L+(v-lo)/(hi-lo)*pw;
+  let svg=`<svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="Waterfall decomposition of the development factor">`;
+  const ticks=5; for(let t=0;t<=ticks;t++){ const v=lo+(hi-lo)*t/ticks; svg+=`<line x1="${x(v)}" y1="30" x2="${x(v)}" y2="${H-30}" stroke="var(--line)" stroke-width="1"/><text x="${x(v)}" y="${H-12}" font-size="11" text-anchor="middle" fill="var(--ink-3)" font-family="var(--font-mono)">${v.toFixed(2)}</text>`; }
+  run=c.baseline;
+  steps.forEach((s,n)=>{
+    const y=40+n*34; let x0,x1,col;
+    if(s.abs){ x0=x(lo); x1=x(s.v); col=s.k==='baseline'?'var(--d-baseline)':'var(--accent)'; }
+    else { x0=x(run); run+=s.v; x1=x(run); col=`var(--d-${s.k})`; }
+    const xa=Math.min(x0,x1), w=Math.max(2,Math.abs(x1-x0));
+    svg+=`<text x="${L-10}" y="${y+14}" font-size="12" text-anchor="end" fill="var(--ink-2)" font-family="var(--font-body)">${s.label}</text>`;
+    svg+=`<rect x="${xa}" y="${y}" width="${w}" height="20" rx="3" fill="${col}" ${s.k==='residual'?'opacity=".7"':''}/>`;
+    const lbl=s.abs?s.v.toFixed(3):(s.v>=0?'+':'−')+Math.abs(s.v).toFixed(3);
+    svg+=`<text x="${Math.max(x0,x1)+8}" y="${y+14}" font-size="12" fill="var(--ink)" font-family="var(--font-mono)">${lbl}</text>`;
+    if(n<steps.length-1){ svg+=`<line x1="${x1}" y1="${y+20}" x2="${x1}" y2="${y+34}" stroke="var(--line-strong)" stroke-dasharray="2 2"/>`; }
+  });
+  const xs=x(c.suggested);
+  svg+=`<line x1="${xs}" y1="24" x2="${xs}" y2="${H-30}" stroke="var(--accent)" stroke-width="2" stroke-dasharray="5 3"/><text x="${xs}" y="18" font-size="11" text-anchor="middle" fill="var(--accent)" font-family="var(--font-display)" font-weight="600">suggested ${c.suggested.toFixed(3)}</text>`;
+  return svg+'</svg>';
+}
+function reading(c, act, tri){
+  const p=c.parts; const out=[];
+  const ay=c.ay, span=`${DL[c.dev]}→${DL[c.dev+1]} months`; const tn=TD[tri].name.toLowerCase();
+  if(c.flag==='hidden'){
+    out.push(`<p>The ${tn} factor for AY ${ay} at ${span} is ${f4(c.observed)}, close to the column norm of ${f4(c.baseline)}. Read from the triangle alone, this cell is unremarkable, and the paid-to-reported ratio is stable too.</p>`);
+    out.push(`<p>The claim notes say otherwise. ${pct(p.inflation)} of the opening balance is medical, repair and settlement inflation spread across ${act.filter(x=>x.driver==='inflation').length} open claims, and it is cancelled by a ${pct(p.recovery)} subrogation recovery on a single large file that will not recur. Gross movement is ${(c.gross*100).toFixed(0)}% against a net of ${pct(c.observed-c.baseline)}. This is the case Friedland warns about: offsetting changes leave the ratios flat.</p>`);
+    out.push(`<p><strong>Suggested ${f4(c.suggested)}.</strong> Strip the recovery, keep the inflation. Carrying the observed ${f4(c.observed)} would understate the reserve for this and later accident years.</p>`);
+  } else if(p.speedup){
+    out.push(`<p>The paid factor for AY ${ay} at ${span} is ${f4(c.observed)} against a norm of ${f4(c.baseline)}. On the paid triangle alone this reads as worsening experience.</p>`);
+    out.push(`<p>Notes on ${act.filter(x=>x.driver==='speedup').length} files reference the 2025 fast-track settlement programme. Those claims paid at their case reserve, about a year earlier than the historical pattern. The reported factor for the same cell barely moves, closed counts and the disposal rate jump, and the paid-to-reported ratio rises: the signature of a timing change, not a severity change.</p>`);
+    out.push(`<p><strong>Suggested ${f4(c.suggested)}.</strong> Remove the ${pct(p.speedup)} timing effect; carry the baseline plus the small inflation signal${p.inflation?` (${pct(p.inflation)})`:''}. A payment pattern this fast will persist if the programme continues, so the paid method needs a revised pattern (Berquist-Sherman settlement-rate adjustment) rather than a higher factor.</p>`);
+  } else if(p.strengthening){
+    out.push(`<p>The reported factor for AY ${ay} at ${span} is ${f4(c.observed)} against a norm of ${f4(c.baseline)}, while the paid factor for the same cell is on its norm. Average case outstanding is up and the paid-to-reported ratio is down.</p>`);
+    out.push(`<p>Notes on ${act.filter(x=>x.driver==='strengthening').length} open files cite the 2025 reserve adequacy initiative: case reserves were raised with no new information on the claims. The movement is a change of reserving basis, not a change in expected cost. Because it hits every open accident year in the same calendar year, the same effect appears down the CY 2025 diagonal.</p>`);
+    out.push(`<p><strong>Suggested ${f4(c.suggested)}.</strong> Do not carry the strengthened factor forward: reserves set on the new basis will develop less than history suggests. Restate the historical case reserves to the current adequacy level (Berquist-Sherman) before selecting reported factors, or rely on the paid method for this period.</p>`);
+  } else if(p.inflation && p.large_loss){
+    const tot=p.inflation+p.large_loss;
+    out.push(`<p>The ${tn} factor for AY ${ay} at ${span} is ${f4(c.observed)} against a norm of ${f4(c.baseline)}. Paid and reported move together and counts are flat, so this is a severity change. A reviewer who stops at the largest claim would attribute the spike to the ${moneyFull(act.find(x=>x.driver==='large_loss')?.inc||0)} verdict and move on.</p>`);
+    out.push(`<p>That verdict explains only ${Math.round(p.large_loss/tot*100)}% of the excess. The other ${Math.round(p.inflation/tot*100)}% is inflation across ${act.filter(x=>x.driver==='inflation').length} ordinary files: fee-schedule drift, repair-cost increases and plaintiff demands anchored to recent verdicts. The same language appears on the AY 2021 and AY 2023 diagonals, which makes it systemic.</p>`);
+    out.push(`<p><strong>Suggested ${f4(c.suggested)}.</strong> Strip the one-off verdict, keep the inflation, and extend the inflation signal to the other open accident years.</p>`);
+  } else if(p.large_loss){
+    out.push(`<p>The ${tn} factor for AY ${ay} at ${span} is ${f4(c.observed)} against ${f4(c.baseline)}. The whole excess is one catastrophic loss paid at policy limits; no other file in the cell shares the fact pattern.</p>`);
+    out.push(`<p><strong>Suggested ${f4(c.suggested)}.</strong> Treat the large loss separately (large-loss load or reinsurance recovery) and carry the baseline.</p>`);
+  } else if(Object.keys(p).length===0){
+    const top=c.movers.slice(0,3), share=c.incr?top.reduce((a,m)=>a+m.amt,0)/c.incr:0;
+    out.push(`<p>The ${tn} factor for AY ${ay} at ${span} is ${f4(c.observed)} against ${f4(c.baseline)}. None of the notes in this cell reference inflation, settlement-process change, a reserve review, recoveries or an outsize verdict.</p>`);
+    out.push(`<p>${top.length?`The three largest movers (${top.map(m=>m.id).join(', ')}) account for ${Math.round(share*100)}% of the movement.`:''} With no systemic driver in the text, the reading is random variation in a small cell.</p>`);
+    out.push(`<p><strong>Suggested ${f4(c.suggested)}.</strong> Carry the baseline; flag the cell for re-check at the next valuation.</p>`);
+  } else {
+    out.push(`<p>Factor ${f4(c.observed)} against ${f4(c.baseline)}. Drivers: ${Object.keys(p).map(k=>`${DNAME[k].toLowerCase()} ${pct(p[k])}`).join(', ')}.</p><p><strong>Suggested ${f4(c.suggested)}.</strong></p>`);
+  }
+  return out.join('');
+}
+function crossStrip(i,d){
+  let h='<table class="xtri"><thead><tr><th>Triangle</th><th>This cell</th><th>Norm</th><th>Diff</th></tr></thead><tbody>';
+  TRI.forEach(t=>{
+    if(t.kind==='cum'){ const f=factorOf(t.k,i,d), b=baselineOf(t.k,i,d); if(f==null||b==null) return; const diff=(f-b)/b; const cls=Math.abs(diff)>0.05?(diff>0?'up':'down'):'';
+      h+=`<tr><td>${t.name} <span class="muted small">factor</span></td><td>${f.toFixed(3)}</td><td>${b.toFixed(3)}</td><td class="${cls}">${pct(diff)}</td></tr>`; }
+    else { if(t.k==='avgcase'){ const o=T.open[i]; if((o[d+1]??0)<15){ h+=`<tr><td>${t.name}</td><td colspan="3" class="muted" style="font-family:var(--font-body)">too few open claims</td></tr>`; return; } }
+      const v=T[t.k][i][d+1], n=levelNorm(t.k,i,d+1); if(v==null||!n) return; const diff=(v-n)/n; const cls=Math.abs(diff)>0.08?(diff>0?'up':'down'):'';
+      h+=`<tr><td>${t.name} <span class="muted small">at ${DL[d+1]} mo</span></td><td>${t.fmt(v)}</td><td>${t.fmt(n)}</td><td class="${cls}">${pct(diff)}</td></tr>`; }
+  });
+  return h+'</tbody></table>';
+}
+function sigTable(i,d,c){
+  const sg=signals(i,d); const m=matchSig(sg,c);
+  const HEAD={paid:'Paid losses: age-to-age factor vs the volume-weighted norm of other accident years (threshold 5%)',rep:'Reported losses (paid + case): age-to-age factor vs norm (threshold 5%)',cnt:'Reported claim counts: age-to-age factor vs norm (threshold 8%)',closed:'Closed claim counts: age-to-age factor vs norm (threshold 8%)',p2r:'Paid ÷ reported: level at the later age vs the mean of other accident years at that age (threshold 8%)',avgcase:'Average case outstanding: level at the later age vs the mean of other years at that age (threshold 8%); blank when fewer than 15 claims are open'};
+  const detail=(k)=>{ const v=sg[k]; if(v==null) return 'Not enough data to compare';
+    if(k==='paid'||k==='rep'||k==='cnt'||k==='closed'){ const tk={paid:'paid',rep:'incurred',cnt:'reported',closed:'closed'}[k]; const f=factorOf(tk,i,d), b=baselineOf(tk,i,d); return `Factor ${f.toFixed(3)} vs norm ${b.toFixed(3)}: ${pct(v)}`; }
+    const tk=k; const x=T[tk][i][d+1], n=levelNorm(tk,i,d+1); return `${TD[tk].fmt(x)} at ${DL[d+1]} mo vs norm ${TD[tk].fmt(n)}: ${pct(v)}`; };
+  let h='<div style="overflow-x:auto"><table class="sig"><thead><tr><th>Signature</th>'+SIGCOLS.map(([k,l])=>`<th title="${HEAD[k]}">${l}</th>`).join('')+'<th title="Expected arrows this cell satisfies, out of those that could be checked">Match</th></tr></thead><tbody>';
+  h+='<tr class="obs"><td>Observed in this cell</td>'+SIGCOLS.map(([k])=>`<td class="arrow" title="${detail(k)}">${m.obs[k]}</td>`).join('')+'<td></td></tr>';
+  m.scored.forEach(x=>{ const best=x===m.best&&x.score>0; h+=`<tr class="${best?'best':''}"><td>${x.s.name}</td>`+SIGCOLS.map(([k])=>{ const e=x.s.exp[k]; if(!e) return '<td class="miss" title="This cause makes no prediction for this column">·</td>'; const hit=m.obs[k]===e; return `<td class="arrow ${hit?'hit':'miss'}" title="${x.s.name} would show ${e}; observed ${m.obs[k]} (${hit?'matches':'does not match'})">${e}</td>`; }).join('')+`<td class="num">${x.n?x.hit+'/'+x.n:'—'}</td></tr>`; });
+  h+='</tbody></table></div>';
+  const bestRead = m.best&&m.best.score>0 ? `<p class="small"><strong>Best match: ${m.best.s.name}.</strong> ${m.best.s.read}</p>` : '';
+  const obsList = SIGCOLS.map(([k,l])=>`<li><span class="arrow num">${m.obs[k]}</span> <strong>${l}</strong>: ${detail(k)}</li>`).join('');
+  const key=`<details class="sigkey"><summary>How to read this table</summary>
+    <div class="reading small" style="margin-top:8px">
+      <p><strong>Each column is one triangle pointed at this cell.</strong> The grey row is what the data shows; every row below it is a known cause written as the pattern it would leave. The Match column counts how many of a cause's expected arrows the observed row satisfies, out of those that could be checked. The highlighted row is the best score, not a verdict: causes that share a shape (inflation and a large loss) are separated by the notes.</p>
+      <ul>
+        <li><span class="arrow num">↑</span> above the norm by more than the threshold (5% for paid and reported losses, 8% for counts and ratios)</li>
+        <li><span class="arrow num">↓</span> below the norm by more than the threshold</li>
+        <li><span class="arrow num">→</span> within the threshold: flat</li>
+        <li><span class="arrow num">·</span> in the grey row, not enough data to compare; in a cause row, that cause makes no prediction for the column</li>
+      </ul>
+      <p><strong>What is compared.</strong> Paid, reported and the two count columns compare this cell's age-to-age factor with the volume-weighted average factor of the other accident years in the same column. Paid ÷ reported and average case outstanding compare the ratio's level at the later age with the mean of the other accident years at that age, which is how ratio triangles are read.</p>
+      <p><strong>The numbers behind this cell's arrows.</strong></p>
+      <ul>${obsList}</ul>
+    </div></details>`;
+  return h+bestRead+key;
+}
+function renderDrill(){
+  const el=document.getElementById('drill');
+  if(!state.sel){ el.innerHTML='<section><p class="muted">Select a cell to open it.</p></section>'; return; }
+  const {i,d}=state.sel; const ay=AYS[i]; const tdef=TD[state.tri];
+  const triK = tdef.kind==='cum' && (state.tri==='paid'||state.tri==='incurred') ? state.tri : 'paid';
+  const c=cellInfo(triK,i,d); if(!c){ el.innerHTML='<section><p class="muted">No development in that cell.</p></section>'; return; }
+  const act=activeClaims(i,d,triK); const key=triK+':'+ay+'-'+d; const ai=state.ai[key]||PRE[key];
+  const span=`${DL[d]}→${DL[d+1]} mo`;
+  const openedVia = triK!==state.tri ? `<p class="small muted">Opened from the ${tdef.name.toLowerCase()} triangle; attribution shown on the paid triangle.</p>` : '';
+  let h=`<section>
+    <div class="drill-head">
+      <div style="display:grid;gap:4px"><span class="eyebrow">Steps ② – ⑤ · opened cell</span><h2>AY ${ay} · ${span} · ${TD[triK].name}</h2>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">${c.flag?`<span class="chip ${flagClass(c.flag)}">${FLAGNAME[c.flag]}</span>`:'<span class="chip ok">Within range</span>'}<span class="small muted">${act.length} claims active in this period · ${act.reduce((a,x)=>a+x.notes.length,0)} notes dated to it</span></div>${openedVia}</div>
+      <div class="stats">
+        <div class="stat"><span class="eyebrow">Observed</span><span class="v">${f4(c.observed)}</span></div>
+        <div class="stat"><span class="eyebrow">Column norm</span><span class="v">${f4(c.baseline)}</span></div>
+        <div class="stat"><span class="eyebrow">Suggested</span><span class="v sugg">${f4(c.suggested)}</span></div>
+      </div>
+    </div>
+  </section>`;
+  h+=`<section><div class="two"><div style="display:grid;gap:8px"><h3>Same cell across triangles</h3>${crossStrip(i,d)}<p class="small muted">A severity change moves paid and reported together. A timing change moves paid, closed counts and the disposal rate while reported stays flat. A reserve-adequacy change moves reported and average case outstanding while paid stays flat. A reporting change moves reported counts first.</p></div>
+    <div style="display:grid;gap:8px;align-content:start"><h3>Which signature does it match?</h3>${sigTable(i,d,c)}</div></div></section>`;
+  h+=`<section><div class="two"><div style="display:grid;gap:8px"><h3>Decomposition of the factor from the notes</h3>${waterfall(c)}<div class="legend" style="gap:6px 14px">${DKEYS.concat(['residual']).map(k=>`<span class="dchip"><i style="background:var(--d-${k})"></i>${DNAME[k]}</span>`).join('')}</div></div>
+    <div class="reading"><h3>Reading</h3>${reading(c,act,triK)}</div></div></section>`;
+  h+=`<section class="ai"><div class="ai-bar"><div style="display:grid;gap:2px"><h3>Read the notes with AI</h3><p class="small muted">Sends the ${act.reduce((a,x)=>a+x.notes.length,0)} notes dated to this period to Claude, which classifies each one to a driver and writes a short reserving memo. Classifications are then compared with the book's own tags.</p></div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap"><button type="button" class="btn" id="aiBtn">Read notes</button><button type="button" class="btn quiet" id="aiStop" hidden>Stop</button></div></div>
+    <div class="ai-out" id="aiOut">${ai?renderAI(ai,act):'<p class="status" id="aiStatus">Not run yet for this cell.</p>'}</div></section>`;
+  h+=`<section><div class="toolbar"><h3>Claims behind the cell</h3><div class="filters"><label><input type="checkbox" id="fltDrivers" ${state.fltDrivers?'checked':''}> Tagged drivers only</label></div></div><div class="claims" id="claimList"></div></section>`;
+  const prev=state.log.find(l=>l.key===key);
+  h+=`<section><h3>Record the decision</h3><div class="decision">
+    <fieldset><legend class="eyebrow" style="margin-bottom:6px">${TD[triK].name} factor to carry for AY ${ay} ${span}</legend>
+      <label><input type="radio" name="basis" value="suggested" id="bSugg" checked> Accept suggested ${f4(c.suggested)}</label>
+      <label><input type="radio" name="basis" value="observed" id="bObs"> Keep observed ${f4(c.observed)}</label>
+      <label><input type="radio" name="basis" value="baseline" id="bBase"> Carry column norm ${f4(c.baseline)}</label>
+      <label><input type="radio" name="basis" value="override" id="bOvr"> Override <input type="number" step="0.001" id="ovr" value="${c.suggested.toFixed(3)}" aria-label="Override factor"></label>
+    </fieldset>
+    <textarea id="rationale" placeholder="Rationale for the file (what the notes showed, what was stripped, what is carried)">${prev?prev.rationale:''}</textarea>
+    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap"><button type="button" class="btn" id="recBtn">Record decision</button><span class="toast" id="recToast">${prev?'A decision is already on file for this cell; recording again replaces it.':''}</span></div></div></section>`;
+  el.innerHTML=h;
+  renderClaims(act, ai);
+  document.getElementById('fltDrivers').onchange=e=>{ state.fltDrivers=e.target.checked; renderClaims(act, state.ai[key]||PRE[key]); };
+  document.getElementById('recBtn').onclick=()=>{
+    const basis=el.querySelector('input[name=basis]:checked').value;
+    const carried=basis==='suggested'?c.suggested:basis==='observed'?c.observed:basis==='baseline'?c.baseline:parseFloat(document.getElementById('ovr').value)||c.observed;
+    const entry={key,cell:`AY ${ay} ${span}`,tri:TD[triK].name,observed:c.observed,suggested:c.suggested,carried,basis,rationale:document.getElementById('rationale').value.trim(),at:new Date().toISOString()};
+    state.log=state.log.filter(l=>l.key!==key).concat([entry]);
+    try{localStorage.setItem('aars-log',JSON.stringify(state.log));}catch(e){}
+    renderLog(); document.getElementById('recToast').textContent='Recorded.';
+  };
+  wireAI(act, c, key, ay, d, TD[triK]);
+}
+function renderClaims(act, ai){
+  const list=document.getElementById('claimList'); if(!list) return;
+  const rows=act.filter(x=>!state.fltDrivers||x.driver!=='routine');
+  if(!rows.length){ list.innerHTML='<div class="claim"><span class="muted">No claims match.</span></div>'; return; }
+  list.innerHTML=rows.map(x=>{
+    const aiTag=ai&&ai.byId?ai.byId[x.c.id]:null;
+    const tag=x.driver==='routine'?'<span class="tag routine">routine</span>':`<span class="tag" style="background:var(--d-${x.driver})">${DNAME[x.driver]}</span>`;
+    const aiChip=aiTag?`<span class="dchip" title="AI classification"><i style="background:var(--d-${DKEYS.includes(aiTag.driver)?aiTag.driver:'residual'})"></i>AI: ${DNAME[aiTag.driver]||aiTag.driver}${aiTag.driver===x.driver?' ✓':' ✗'}</span>`:'';
+    const facts=`${x.c.state} · ${x.c.injury} · ${x.c.litigated?'litigated':'not litigated'} · ${x.closed?'closed this period':x.reported?'reported this period':'open'}`;
+    const notes=x.notes.length?`<details><summary>${x.notes.length} note${x.notes.length>1?'s':''} · ${x.c.adjuster}</summary>${x.notes.map(n=>`<p class="note" style="margin-top:6px">${n.text}</p>`).join('')}${aiTag&&aiTag.why?`<p class="note ai" style="margin-top:6px">AI: ${aiTag.why}</p>`:''}</details>`:'<span class="small muted">No note this period</span>';
+    return `<div class="claim"><div class="l1"><span class="id">${x.c.id}</span>${tag}${aiChip}<span class="small muted">${facts}</span></div><span class="amt">${moneyFull(x.inc)}</span><div class="note">${notes}</div></div>`;
+  }).join('');
+}
+function renderAI(ai, act){
+  if(ai.error) return `<p class="status">${ai.error}</p>`;
+  const tagged=act.filter(x=>x.notes.length);
+  let agree=0, n=0; tagged.forEach(x=>{ const a=ai.byId[x.c.id]; if(!a) return; n++; if(a.driver===x.driver) agree++; });
+  const sysText = ai.systemic===true?'Systemic driver present':ai.systemic===false?'No systemic driver':'';
+  const badge = ai.pre?`<span class="chip ok" title="Reading produced by Claude on ${ai.ranAt} and stored in the page">Pre-run ${ai.ranAt}</span>`:'<span class="chip ok">Live reading</span>';
+  return `<div class="agree">${badge}<span class="eyebrow">Agreement with book tags</span><span class="num">${n?Math.round(agree/n*100):0}% (${agree}/${n})</span><span class="meter"><i style="width:${n?agree/n*100:0}%"></i></span>${sysText?`<span class="chip ok">${sysText}</span>`:''}${ai.suggested_ldf?`<span class="small">AI suggests <span class="num">${Number(ai.suggested_ldf).toFixed(3)}</span> · ${ai.treatment||''}</span>`:''}</div>
+    <pre>${(ai.memo||'').replace(/</g,'&lt;')}</pre>${ai.truncated?'<p class="status">Answer was cut short.</p>':''}`;
+}
+let samplePromise=null;
+function getSample(){ if(!samplePromise) samplePromise=(window.claude&&claude.use)?claude.use('sample').catch(()=>null):Promise.resolve(null); return samplePromise; }
+function wireAI(act, c, key, ay, d, tdef){
+  const btn=document.getElementById('aiBtn'), stop=document.getElementById('aiStop'), out=document.getElementById('aiOut');
+  getSample().then(s=>{ if(!s){ btn.disabled=true; btn.textContent=PRE[key]?'Pre-run reading shown':'AI reading unavailable here'; const st=document.getElementById('aiStatus'); if(st) st.textContent='Live reading runs only inside Claude. Cells on the diagnostic feed carry a stored reading.'; } else if(PRE[key]&&!state.ai[key]){ btn.textContent='Read notes live'; } });
+  let ctl=null;
+  stop.onclick=()=>ctl&&ctl.abort();
+  btn.onclick=async()=>{
+    const sample=await getSample(); if(!sample) return;
+    const notes=[]; act.forEach(x=>x.notes.forEach(n=>notes.push({id:x.c.id, movement:Math.round(x.inc), note:n.text})));
+    const slice=notes.slice(0,60);
+    const sg=signals(AYS.indexOf(ay),d);
+    const prompt=`You are a P&C reserving actuary's assistant. Below are adjuster notes written during one development period of a loss triangle cell. Classify each note to exactly one driver, then write a short reserving memo.
+
+Cell: accident year ${ay}, development ${DL[d]} to ${DL[d+1]} months, ${tdef.name} triangle, Commercial Auto Liability.
+Observed age-to-age factor ${c.observed.toFixed(3)}; volume-weighted norm for this column across other accident years ${c.baseline.toFixed(3)}.
+Cross-triangle signals for the same cell (deviation from column norm): paid factor ${sg.paid==null?'n/a':pct(sg.paid)}, reported factor ${sg.rep==null?'n/a':pct(sg.rep)}, closed-count factor ${sg.closed==null?'n/a':pct(sg.closed)}, reported-count factor ${sg.cnt==null?'n/a':pct(sg.cnt)}, paid-to-reported ratio ${sg.p2r==null?'n/a':pct(sg.p2r)}, average case outstanding ${sg.avgcase==null?'n/a':pct(sg.avgcase)}.
+
+Driver codes:
+- "inflation": medical, repair, wage or settlement cost levels rising; demands anchored to recent verdicts; fee schedules above those priced. Recurring and systemic.
+- "large_loss": a single outsize verdict or catastrophic loss paid at or near limits. One-off.
+- "recovery": subrogation, salvage or other one-time credit reducing paid loss. One-off.
+- "speedup": settlement made earlier than the historical pattern (fast-track, early-resolution programme) with no change to the amount. Timing only.
+- "strengthening": case reserve raised because of a reserve adequacy review or new reserving guideline, with no new information on the claim. Change of basis, not of expected cost.
+- "routine": ordinary claim handling with no cost-level signal.
+
+Notes (JSON): ${JSON.stringify(slice)}
+
+Reply with only a JSON object of this shape:
+{"notes":[{"id":"CA-...","driver":"inflation|large_loss|recovery|speedup|strengthening|routine","why":"<=12 words"}],
+ "systemic": true|false,
+ "treatment": "accept observed|strip one-offs|adjust pattern|restate case reserves|investigate",
+ "suggested_ldf": <number>,
+ "memo": "<=140 words: what is driving the factor, whether the cross-triangle signals agree with the notes, what is recurring versus one-off, what factor to carry and why. Plain sentences, no bullet points."}
+Use one entry per note (same id may repeat). Keep "why" short.`;
+    let permanent=false; ctl=new AbortController(); btn.disabled=true; stop.hidden=false;
+    out.innerHTML='<p class="status">Thinking… reading '+slice.length+' notes</p><pre id="aiStream"></pre>';
+    try{
+      const res=await sample.json(prompt,{signal:ctl.signal, modelTier:'default', onText:({text})=>{ const p=document.getElementById('aiStream'); if(p) p.textContent=text.slice(-600); }});
+      const byId={}; (res.notes||[]).forEach(n=>{ if(!n||!n.id) return; const dr=String(n.driver||'routine'); if(!byId[n.id]||(byId[n.id].driver==='routine'&&dr!=='routine')) byId[n.id]={driver:dr,why:String(n.why||'')}; });
+      state.ai[key]={byId, memo:String(res.memo||''), systemic:res.systemic, treatment:res.treatment, suggested_ldf:res.suggested_ldf};
+      out.innerHTML=renderAI(state.ai[key], act); renderClaims(act, state.ai[key]);
+    }catch(e){
+      const code=e&&e.code; let msg;
+      if(code==='cancelled') msg='Stopped.';
+      else if(code==='not_granted'||code==='sampling_disabled'||code==='not_declared'||code==='capability_disabled') { msg='AI reading is not available for this viewer.'; permanent=true; }
+      else if(code==='rate_limited') msg='Too many requests right now. Try again in a minute.';
+      else if(code==='invalid_json') msg='The reply could not be parsed. Try again.';
+      else if(code==='refused') msg='The request was declined.';
+      else msg='The reading failed ('+(code||'error')+'). Try again.';
+      out.innerHTML='<p class="status">'+msg+'</p>';
+    } finally { if(!permanent) btn.disabled=false; stop.hidden=true; if(state.ai[key]) btn.textContent='Read notes again'; }
+  };
+}
+function renderLog(){
+  const tb=document.querySelector('#log tbody');
+  if(!state.log.length){ tb.innerHTML='<tr><td colspan="7" class="muted">No decisions recorded yet. Open a cell, review the attribution, and record what you will carry.</td></tr>'; return; }
+  tb.innerHTML=state.log.slice().reverse().map(l=>`<tr><td>${l.cell}</td><td>${l.tri}</td><td class="num">${f4(l.observed)}</td><td class="num">${l.suggested!=null?f4(l.suggested):'—'}</td><td class="num"><strong>${f4(l.carried)}</strong></td><td>${l.basis}</td><td>${(l.rationale||'').replace(/</g,'&lt;')||'<span class="muted">—</span>'}</td></tr>`).join('');
+}
+function renderAll(){ renderTabs(); renderTri(); renderFeed(); renderDiag(); renderDrill(); renderLog(); }
+document.getElementById('viewFactors').onclick=()=>{state.view='factors';renderAll();};
+document.getElementById('viewValues').onclick=()=>{state.view='values';renderAll();};
+state.sel={i:AYS.indexOf(2022), d:2};
+renderAll();
+})();
+</script>
