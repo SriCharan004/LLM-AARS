@@ -55,6 +55,49 @@ function cellInfo(k,i,d){
   const base=baselineOf(k,i,d)??obs;
   return {ay:AYS[i],dev:d,observed:obs,baseline:base,parts:{},residual:obs-base,suggested:base,gross:0,flag:null,claims:[],movers:[],derived:true};
 }
+
+// ---------- column selection ----------
+// adjusted factor for one AY: observed minus the one-off driver contributions found in the notes
+function adjFactor(k,i,d){
+  const c=cellInfo(k,i,d); if(!c) return null;
+  let oneoff=0; const stripped={};
+  Object.keys(c.parts).forEach(p=>{ if(!DRV[p].recurring){ oneoff+=c.parts[p]; stripped[p]=c.parts[p]; } });
+  return {obs:c.observed, adj:c.observed-oneoff, stripped, parts:c.parts, w:T[k][i][d]};
+}
+function columnSel(k,d){
+  const rows=[]; let n0=0,m0=0,n1=0,m1=0;
+  AYS.forEach((ay,i)=>{ const a=adjFactor(k,i,d); if(!a) return; rows.push(Object.assign({ay,i},a)); n0+=a.obs*a.w; m0+=a.w; n1+=a.adj*a.w; m1+=a.w; });
+  const last=rows.slice(-5); let n2=0,m2=0; last.forEach(r=>{ n2+=r.adj*r.w; m2+=r.w; });
+  return {rows, unadj:m0?n0/m0:null, adj:m1?n1/m1:null, adjLast5:m2?n2/m2:null, simpleAdj:rows.length?rows.reduce((a,r)=>a+r.adj,0)/rows.length:null};
+}
+function columnWaterfall(k,d,aiLdf){
+  const cs=columnSel(k,d); const W=560, L=190, R=90, pw=W-L-R;
+  // weighted contribution of each one-off driver to the column average
+  const contrib={}; let m=0; cs.rows.forEach(r=>{ m+=r.w; Object.keys(r.stripped).forEach(p=>{ contrib[p]=(contrib[p]||0)+r.stripped[p]*r.w; }); });
+  Object.keys(contrib).forEach(p=>contrib[p]=-contrib[p]/m);
+  const steps=[{k:'unadj',label:'Unadjusted vol-wtd avg',v:cs.unadj,abs:true}];
+  Object.keys(contrib).sort((a,b)=>Math.abs(contrib[b])-Math.abs(contrib[a])).forEach(p=>steps.push({k:p,label:'Strip '+DNAME[p].toLowerCase(),v:contrib[p]}));
+  if(!Object.keys(contrib).length) steps.push({k:'residual',label:'Nothing to strip',v:0});
+  steps.push({k:'adj',label:'AARS-adjusted LDF',v:cs.adj,abs:true});
+  const H=40+steps.length*34+36;
+  let lo=Math.min(cs.unadj,cs.adj,aiLdf??cs.adj), hi=Math.max(cs.unadj,cs.adj,aiLdf??cs.adj), run=cs.unadj; steps.slice(1,-1).forEach(st=>{ run+=st.v; lo=Math.min(lo,run); hi=Math.max(hi,run); });
+  const pad=(hi-lo)*0.2||0.01; lo-=pad; hi+=pad; const x=v=>L+(v-lo)/(hi-lo)*pw;
+  let svg=`<svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="Waterfall from the unadjusted column average to the AARS-adjusted factor">`;
+  for(let t=0;t<=5;t++){ const v=lo+(hi-lo)*t/5; svg+=`<line x1="${x(v)}" y1="30" x2="${x(v)}" y2="${H-30}" stroke="var(--line)"/><text x="${x(v)}" y="${H-12}" font-size="11" text-anchor="middle" fill="var(--ink-3)" font-family="var(--font-mono)">${v.toFixed(3)}</text>`; }
+  run=cs.unadj;
+  steps.forEach((st,n)=>{ const y=40+n*34; let x0,x1,col; if(st.abs){ x0=x(lo); x1=x(st.v); col=st.k==='unadj'?'var(--d-baseline)':'var(--accent)'; } else { x0=x(run); run+=st.v; x1=x(run); col=`var(--d-${st.k})`; }
+    svg+=`<text x="${L-10}" y="${y+14}" font-size="12" text-anchor="end" fill="var(--ink-2)" font-family="var(--font-body)">${st.label}</text><rect x="${Math.min(x0,x1)}" y="${y}" width="${Math.max(2,Math.abs(x1-x0))}" height="20" rx="3" fill="${col}"/><text x="${Math.max(x0,x1)+8}" y="${y+14}" font-size="12" fill="var(--ink)" font-family="var(--font-mono)">${st.abs?st.v.toFixed(3):(st.v>=0?'+':'−')+Math.abs(st.v).toFixed(3)}</text>`;
+    if(n<steps.length-1) svg+=`<line x1="${x1}" y1="${y+20}" x2="${x1}" y2="${y+34}" stroke="var(--line-strong)" stroke-dasharray="2 2"/>`; });
+  if(aiLdf!=null){ const xa=x(aiLdf); svg+=`<line x1="${xa}" y1="24" x2="${xa}" y2="${H-30}" stroke="var(--accent)" stroke-width="2" stroke-dasharray="5 3"/><text x="${xa}" y="18" font-size="11" text-anchor="middle" fill="var(--accent)" font-family="var(--font-display)" font-weight="600">AI recommends ${Number(aiLdf).toFixed(3)}</text>`; }
+  return svg+'</svg>';
+}
+function factorSet(k){
+  const out=[]; for(let d=0;d<NDEV-1;d++){ const cs=columnSel(k,d); out.push({d, unadj:cs.unadj, adj:cs.adj}); }
+  // cumulative to ultimate (tail 1.000)
+  let cu=1, ca=1; for(let d=NDEV-2;d>=0;d--){ cu*= out[d].unadj??1; ca*= out[d].adj??1; out[d].cdfU=cu; out[d].cdfA=ca; }
+  return out;
+}
+
 // signals for a cell (i,d): development d->d+1
 function signals(i,d){
   const dev=(k)=>{ const f=factorOf(k,i,d), b=baselineOf(k,i,d); return (f==null||b==null)?null:(f-b)/b; };
@@ -155,7 +198,11 @@ function renderTri(){
       }
       h+='</tr>';
     });
-    h+='<tr class="avg"><td>Vol-wtd avg</td>'; for(let d=0;d<NDEV-1;d++){ let n=0,m=0; M.forEach(r=>{ if(r[d+1]!=null&&r[d]){n+=r[d+1];m+=r[d];}}); h+=`<td>${m?(n/m).toFixed(3):'·'}</td>`; } h+='</tr></tbody>';
+    h+='<tr class="avg"><td>Vol-wtd avg</td>'; for(let d=0;d<NDEV-1;d++){ let n=0,m=0; M.forEach(r=>{ if(r[d+1]!=null&&r[d]){n+=r[d+1];m+=r[d];}}); h+=`<td>${m?(n/m).toFixed(3):'·'}</td>`; } h+='</tr>';
+    if(state.tri==='paid'||state.tri==='incurred'){ const fs=factorSet(state.tri);
+      h+='<tr class="avg sel-row"><td title="Volume-weighted average after stripping the one-off drivers the notes identified in each cell">AARS-adjusted avg</td>'+fs.map(f=>`<td class="${f.adj!=null&&f.unadj!=null&&Math.abs(f.adj-f.unadj)>0.0005?(f.adj>f.unadj?'upc':'dnc'):''}" title="Unadjusted ${f.unadj==null?'·':f.unadj.toFixed(3)}">${f.adj==null?'·':f.adj.toFixed(3)}</td>`).join('')+'</tr>';
+      h+='<tr class="avg"><td title="Product of the adjusted factors from this age to 120 months; tail factor 1.000">Adjusted to ultimate</td>'+fs.map(f=>`<td title="Unadjusted ${f.cdfU.toFixed(3)}">${f.cdfA.toFixed(3)}</td>`).join('')+'</tr>'; }
+    h+='</tbody>';
   } else if(state.view==='factors'){
     // ratio triangle: deviation of each cell from the mean of other AYs at the same age (read down the columns)
     h+='<thead><tr><th>Acc. year</th>'+DL.map(l=>`<th>${l} mo</th>`).join('')+'</tr></thead><tbody>';
@@ -307,6 +354,28 @@ function renderDrill(){
     <div style="display:grid;gap:8px;align-content:start"><h3>Which signature does it match?</h3>${sigTable(i,d,c)}</div></div></section>`;
   h+=`<section><div class="two"><div style="display:grid;gap:8px"><h3>Decomposition of the factor from the notes</h3>${waterfall(c)}<div class="legend" style="gap:6px 14px">${DKEYS.concat(['residual']).map(k=>`<span class="dchip"><i style="background:var(--d-${k})"></i>${DNAME[k]}</span>`).join('')}</div></div>
     <div class="reading"><h3>Reading</h3>${reading(c,act,triK)}</div></div></section>`;
+  // column selection
+  { const cs=columnSel(triK,d); const ckey='col:'+triK+':'+d; const cai=state.ai[ckey]||PRE[ckey];
+    const rowsH=cs.rows.map(r=>{ const strip=Object.keys(r.stripped); const cur=r.i===i;
+      return `<tr class="${cur?'cur':''}"><td>${r.ay}${cur?' <span class="muted small">(open)</span>':''}</td><td class="num">${r.obs.toFixed(3)}</td><td>${strip.length?strip.map(p=>`<span class="dchip"><i style="background:var(--d-${p})"></i>${DNAME[p]} ${pct(r.stripped[p])}</span>`).join(' '):'<span class="muted small">none</span>'}</td><td class="num"><strong>${r.adj.toFixed(3)}</strong></td><td class="num muted">${money(r.w)}</td></tr>`; }).join('');
+    h+=`<section><div class="toolbar"><div><span class="eyebrow">Step ④ · column selection</span><h3>Selecting the ${DL[d]}→${DL[d+1]} factor for the ${TD[triK].name.toLowerCase()} triangle</h3></div>
+        <p class="small muted" style="max-width:52ch">One factor is carried per column. Each accident year's observed factor is adjusted by removing the one-off movements the notes identified; recurring inflation stays in. The selection is the volume-weighted average of the adjusted factors.</p></div>
+      <div class="two"><div style="overflow-x:auto"><table class="xtri colsel"><thead><tr><th>Acc. year</th><th>Observed</th><th style="text-align:left">Stripped (one-off)</th><th>Adjusted</th><th>Weight</th></tr></thead><tbody>${rowsH}</tbody>
+        <tfoot><tr><td>Vol-wtd avg, unadjusted</td><td class="num">${cs.unadj.toFixed(3)}</td><td></td><td></td><td></td></tr>
+        <tr class="selrow"><td><strong>Vol-wtd avg, adjusted</strong></td><td></td><td class="small muted">${pct((cs.adj-cs.unadj)/cs.unadj)} vs unadjusted</td><td class="num"><strong>${cs.adj.toFixed(3)}</strong></td><td></td></tr>
+        <tr><td>Adjusted, last 5 years</td><td></td><td></td><td class="num">${cs.adjLast5==null?'·':cs.adjLast5.toFixed(3)}</td><td></td></tr>
+        <tr><td>Adjusted, simple average</td><td></td><td></td><td class="num">${cs.simpleAdj==null?'·':cs.simpleAdj.toFixed(3)}</td><td></td></tr></tfoot></table></div>
+      <div style="display:grid;gap:10px;align-content:start"><h3 style="font-size:.9rem">From unadjusted average to AARS-adjusted LDF</h3>${columnWaterfall(triK,d,cai&&cai.suggested_ldf?Number(cai.suggested_ldf):null)}<div class="stats"><div class="stat"><span class="eyebrow">Unadjusted</span><span class="v">${cs.unadj.toFixed(3)}</span></div><div class="stat"><span class="eyebrow">AARS-adjusted</span><span class="v sugg">${cs.adj.toFixed(3)}</span></div>${cai&&cai.suggested_ldf?`<div class="stat"><span class="eyebrow">AI recommends</span><span class="v">${Number(cai.suggested_ldf).toFixed(3)}</span></div>`:''}</div>
+        <div class="ai"><div class="ai-bar"><h3 style="font-size:.9rem">AI column memo</h3><div style="display:flex;gap:8px"><button type="button" class="btn ghost" id="colAiBtn">Write column memo</button><button type="button" class="btn quiet" id="colAiStop" hidden>Stop</button></div></div>
+        <div class="ai-out" id="colAiOut">${cai?renderColAI(cai):'<p class="status" id="colAiStatus">Not run yet for this column.</p>'}</div></div>
+        <div class="decision"><fieldset><legend class="eyebrow" style="margin-bottom:6px">Column factor to carry</legend>
+          <label><input type="radio" name="cbasis" value="adjusted" checked> AARS-adjusted ${cs.adj.toFixed(3)}</label>
+          <label><input type="radio" name="cbasis" value="unadjusted"> Unadjusted ${cs.unadj.toFixed(3)}</label>
+          ${cai&&cai.suggested_ldf?`<label><input type="radio" name="cbasis" value="ai"> AI recommendation ${Number(cai.suggested_ldf).toFixed(3)}</label>`:''}
+          <label><input type="radio" name="cbasis" value="override"> Override <input type="number" step="0.001" id="covr" value="${cs.adj.toFixed(3)}" aria-label="Override column factor"></label></fieldset>
+          <textarea id="crationale" placeholder="Rationale for the column selection"></textarea>
+          <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap"><button type="button" class="btn" id="crecBtn">Record column selection</button><span class="toast" id="crecToast"></span></div></div>
+      </div></div></section>`; }
   h+=`<section class="ai"><div class="ai-bar"><div style="display:grid;gap:2px"><h3>Read the notes with AI</h3><p class="small muted">Sends the ${act.reduce((a,x)=>a+x.notes.length,0)} notes dated to this period to Claude, which classifies each one to a driver and writes a short reserving memo. Classifications are then compared with the book's own tags.</p></div>
     <div style="display:flex;gap:8px;flex-wrap:wrap"><button type="button" class="btn" id="aiBtn">Read notes</button><button type="button" class="btn quiet" id="aiStop" hidden>Stop</button></div></div>
     <div class="ai-out" id="aiOut">${ai?renderAI(ai,act):'<p class="status" id="aiStatus">Not run yet for this cell.</p>'}</div></section>`;
@@ -333,6 +402,38 @@ function renderDrill(){
     renderLog(); document.getElementById('recToast').textContent='Recorded.';
   };
   wireAI(act, c, key, ay, d, TD[triK]);
+  wireColumn(triK, d, i);
+}
+function renderColAI(ai){
+  const badge = ai.pre?`<span class="chip ok" title="Memo produced by Claude on ${ai.ranAt} and stored in the page">Pre-run ${ai.ranAt}</span>`:'<span class="chip ok">Live</span>';
+  return `<div class="agree">${badge}${ai.suggested_ldf?`<span class="small">AI recommends <span class="num">${Number(ai.suggested_ldf).toFixed(3)}</span>${ai.basis?` · ${ai.basis}`:''}</span>`:''}</div><pre>${(ai.memo||'').replace(/</g,'&lt;')}</pre>`;
+}
+function columnPrompt(triK,d){
+  const cs=columnSel(triK,d);
+  const rows=cs.rows.map(r=>({ay:r.ay, observed:+r.obs.toFixed(4), adjusted:+r.adj.toFixed(4), weight:Math.round(r.w), drivers:Object.fromEntries(Object.entries(r.parts).map(([k,v])=>[k,+v.toFixed(4)]))}));
+  return `You are a P&C reserving actuary's assistant selecting one age-to-age development factor for a column of a loss triangle.
+
+Column: ${DL[d]} to ${DL[d+1]} months, ${TD[triK].name} triangle, Commercial Auto Liability, valued 31 Dec 2025.
+For each accident year: the observed factor, the factor after removing one-off driver movements identified in the adjuster notes (large losses, recoveries, settlement timing, case-reserve basis changes), the opening volume used as weight, and the driver contributions found (positive or negative additions to the factor). Recurring inflation is deliberately kept in the adjusted factors.
+Volume-weighted average unadjusted ${cs.unadj.toFixed(4)}; adjusted ${cs.adj.toFixed(4)}; adjusted last five years ${cs.adjLast5==null?'n/a':cs.adjLast5.toFixed(4)}; adjusted simple average ${cs.simpleAdj==null?'n/a':cs.simpleAdj.toFixed(4)}.
+
+Rows (JSON): ${JSON.stringify(rows)}
+
+Reply with only a JSON object: {"suggested_ldf": <number>, "basis": "<which average or judgement, <=8 words>", "memo": "<=150 words: which years carry one-off movements and what was stripped, whether a recurring driver is present and should be carried forward, which average you would select and why, and what to watch at the next valuation. Plain sentences, no bullet points."}`;
+}
+function wireColumn(triK,d,i){
+  const ckey='col:'+triK+':'+d; const btn=document.getElementById('colAiBtn'), stop=document.getElementById('colAiStop'), out=document.getElementById('colAiOut'); if(!btn) return;
+  getSample().then(s=>{ if(!s){ btn.disabled=true; btn.textContent=PRE[ckey]?'Pre-run memo shown':'AI memo unavailable here'; } else if(PRE[ckey]&&!state.ai[ckey]) btn.textContent='Write column memo live'; });
+  let ctl=null; stop.onclick=()=>ctl&&ctl.abort();
+  btn.onclick=async()=>{ const sample=await getSample(); if(!sample) return; let permanent=false; ctl=new AbortController(); btn.disabled=true; stop.hidden=false; out.innerHTML='<p class="status">Thinking…</p>';
+    try{ const res=await sample.json(columnPrompt(triK,d),{signal:ctl.signal, modelTier:'default'}); state.ai[ckey]={memo:String(res.memo||''),suggested_ldf:res.suggested_ldf,basis:res.basis}; renderAll(); }
+    catch(e){ const code=e&&e.code; let msg; if(code==='cancelled') msg='Stopped.'; else if(['not_granted','sampling_disabled','not_declared','capability_disabled'].includes(code)){ msg='AI memo is not available for this viewer.'; permanent=true; } else if(code==='rate_limited') msg='Too many requests right now. Try again in a minute.'; else msg='The memo failed ('+(code||'error')+'). Try again.'; out.innerHTML='<p class="status">'+msg+'</p>'; }
+    finally{ if(!permanent) btn.disabled=false; stop.hidden=true; } };
+  const rec=document.getElementById('crecBtn'); if(!rec) return;
+  rec.onclick=()=>{ const cs=columnSel(triK,d); const cai=state.ai[ckey]||PRE[ckey]; const basis=document.querySelector('input[name=cbasis]:checked').value;
+    const carried=basis==='adjusted'?cs.adj:basis==='unadjusted'?cs.unadj:basis==='ai'?Number(cai.suggested_ldf):(parseFloat(document.getElementById('covr').value)||cs.adj);
+    const entry={key:ckey,cell:`Column ${DL[d]}→${DL[d+1]}`,tri:TD[triK].name,observed:cs.unadj,suggested:cs.adj,carried,basis:'column · '+basis,rationale:document.getElementById('crationale').value.trim(),at:new Date().toISOString()};
+    state.log=state.log.filter(l=>l.key!==ckey).concat([entry]); try{localStorage.setItem('aars-log',JSON.stringify(state.log));}catch(e){} renderLog(); document.getElementById('crecToast').textContent='Recorded.'; };
 }
 function renderClaims(act, ai){
   const list=document.getElementById('claimList'); if(!list) return;

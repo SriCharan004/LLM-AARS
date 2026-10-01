@@ -6,31 +6,27 @@ adjuster notes behind it, decomposes the development factor into named drivers, 
 the factor to carry. The actuary decides; the decision log is the sign-off record.
 
 The page itself is the same single-file workbench used in the prototype, so the design is
-unchanged. Streamlit adds a sidebar that calls the Claude API with your key to read any cell's
-notes live and injects the result into the page as a stored reading.
+unchanged. The AI readings (per-cell note classifications and memos, and per-column selection
+memos) ship with the page in `data/prerun.json`; the app makes no network calls and needs no key.
 
 ## Run locally
 
     pip install -r requirements.txt
     streamlit run app.py
 
-Optional: copy `.streamlit/secrets.toml.example` to `.streamlit/secrets.toml` and add your key,
-or paste a key into the sidebar at runtime.
-
 ## Deploy on Streamlit Community Cloud
 
 1. Push this folder to a GitHub repository.
 2. At share.streamlit.io choose the repo, branch and `app.py`.
-3. In App settings → Secrets, add `ANTHROPIC_API_KEY` (and optionally `ANTHROPIC_MODEL`).
-4. Deploy. The page works without a key; the key only enables live readings.
+3. Deploy. Nothing else to configure.
 
 ## Layout
 
-    app.py                 Streamlit shell: serves the page, runs live readings
+    app.py                 Streamlit shell: serves the page
     assets/head.html       page markup and styles
     assets/script.html     page logic (triangles, signatures, waterfall, decision log)
     data/book.json         synthetic claim-level book (744 claims, AY 2016–2025, valued 31 Dec 2025)
-    data/prerun.json       stored AI readings for the flagged cells (Claude, 2026-10-01)
+    data/prerun.json       stored AI readings: flagged cells and column memos (Claude, 2026-10-01)
     generate_book.py       regenerates data/book.json with the seeded effects
 
 ## Replacing the synthetic book with real data
