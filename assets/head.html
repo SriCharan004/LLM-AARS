@@ -7,7 +7,7 @@
   --ink:#1c1b18; --ink-2:#4f4c45; --ink-3:#7d786d;
   --accent:#0d5c63; --accent-ink:#ffffff; --accent-soft:#dcecec;
   --spike:#b45309; --spike-soft:#fdebd2; --drop:#1d4ed8; --drop-soft:#dbe6fd; --hidden:#7c2d92; --hidden-soft:#f0def6;
-  --d-inflation:#c2410c; --d-large_loss:#1d4ed8; --d-recovery:#15803d; --d-speedup:#7c3aed; --d-strengthening:#be185d; --d-residual:#8a857a; --d-baseline:#4f4c45;
+  --d-inflation:#c2410c; --d-large_loss:#1d4ed8; --d-recovery:#15803d; --d-speedup:#7c3aed; --d-strengthening:#be185d; --d-slowdown:#a16207; --d-residual:#8a857a; --d-baseline:#4f4c45;
   --font-display:"Archivo",system-ui,sans-serif; --font-body:"Source Sans 3",system-ui,sans-serif; --font-mono:"JetBrains Mono",ui-monospace,Menlo,monospace;
   --radius:4px;
 }
@@ -16,14 +16,14 @@
   --ink:#ecebe6; --ink-2:#b8b5ac; --ink-3:#86837a;
   --accent:#4fb3b9; --accent-ink:#0f1a1b; --accent-soft:#1d3537;
   --spike:#f59e0b; --spike-soft:#3b2a0e; --drop:#60a5fa; --drop-soft:#172a4a; --hidden:#c084fc; --hidden-soft:#2f1d3a;
-  --d-inflation:#ea580c; --d-large_loss:#3b82f6; --d-recovery:#16a34a; --d-speedup:#a855f7; --d-strengthening:#ec4899; --d-residual:#8a8f94; --d-baseline:#b8b5ac;
+  --d-inflation:#ea580c; --d-large_loss:#3b82f6; --d-recovery:#16a34a; --d-speedup:#a855f7; --d-strengthening:#ec4899; --d-slowdown:#b45309; --d-residual:#8a8f94; --d-baseline:#b8b5ac;
   color-scheme:dark }}
 :root[data-theme="dark"]{
   --bg:#17181a; --surface:#1f2124; --surface-2:#282b2f; --line:#363a40; --line-strong:#4b5058;
   --ink:#ecebe6; --ink-2:#b8b5ac; --ink-3:#86837a;
   --accent:#4fb3b9; --accent-ink:#0f1a1b; --accent-soft:#1d3537;
   --spike:#f59e0b; --spike-soft:#3b2a0e; --drop:#60a5fa; --drop-soft:#172a4a; --hidden:#c084fc; --hidden-soft:#2f1d3a;
-  --d-inflation:#ea580c; --d-large_loss:#3b82f6; --d-recovery:#16a34a; --d-speedup:#a855f7; --d-strengthening:#ec4899; --d-residual:#8a8f94; --d-baseline:#b8b5ac;
+  --d-inflation:#ea580c; --d-large_loss:#3b82f6; --d-recovery:#16a34a; --d-speedup:#a855f7; --d-strengthening:#ec4899; --d-slowdown:#b45309; --d-residual:#8a8f94; --d-baseline:#b8b5ac;
   color-scheme:dark }
 
 *{box-sizing:border-box}
@@ -131,6 +131,18 @@ table.colsel tfoot tr.selrow td{color:var(--accent)}
 .tabgroup{display:grid;gap:5px}
 .tabgroup .eyebrow{font-size:.64rem}
 .chart{max-width:640px}
+/* driver map */
+table.hmap th{white-space:nowrap;text-align:right}
+table.hmap th .dchip{justify-content:flex-end}
+table.hmap td.hm{text-align:right;font-family:var(--font-mono);font-variant-numeric:tabular-nums;font-size:.8rem;line-height:1.15;padding:6px 8px;border-left:2px solid var(--surface)}
+table.hmap td.hm small{display:block;font-family:var(--font-body);font-size:.68rem;opacity:.85;letter-spacing:.01em}
+table.hmap td.c{cursor:pointer}
+table.hmap td.c:hover{outline:2px solid var(--accent);outline-offset:-2px}
+table.hmap td.c.sel{outline:2px solid var(--accent);outline-offset:-2px;font-weight:600}
+table.hmap tr.cur td:first-child{background:var(--surface-2)}
+table.hmap tr.avg td{border-top:2px solid var(--line-strong);font-style:normal;color:var(--ink-2)}
+.hm-detail{display:grid;gap:10px;border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:var(--radius);padding:12px 14px;background:var(--surface)}
+.hm-detail .claims{max-height:420px;overflow:auto}
 /* drill structure */
 .drill > section{padding:20px 22px 22px;gap:16px}
 .sec-head{display:grid;gap:4px;max-width:72ch}
@@ -262,7 +274,7 @@ footer{border-top:1px solid var(--line);padding-top:14px;color:var(--ink-2);font
 <footer>
   <strong>How the attribution works.</strong>
   <p>For each cell the baseline is the volume-weighted average factor of the other accident years in the same column. Each adjuster note is classified to a driver, and the paid or incurred movement that note explains is divided by the cell's opening value, giving an additive contribution to the factor. Baseline plus contributions plus an unexplained residual equals the observed factor exactly, so the decomposition can be audited line by line. The suggested factor carries the baseline and any recurring driver (inflation) and strips one-off movements (large losses, recoveries, settlement timing). The original proposal describes a SHAP layer; this prototype uses the additive attribution above because SHAP explains a numeric model's output, not a language model's reading of text. Driver tags on the claims are the ground truth the book was generated with; the AI reading is a live classification you can compare against them.</p>
-  <p>The triangle set and the way they are read follow Friedland, <em>Estimating Unpaid Claims Using Basic Techniques</em>, chapter 6: paid and reported losses, reported and closed counts, the paid-to-reported ratio, the closed-to-reported (disposal) ratio, and the three averages. Friedland's warning that a stable paid-to-reported ratio does not mean nothing is changing is the hidden-volatility case here. This is a synthetic Commercial Auto Liability book of around 740 claims with annual development, generated so that the CY 2025 diagonal contains four known effects: hidden volatility in AY 2021, a spike in AY 2022 that is mostly inflation and partly one large verdict, a spike in AY 2023 that is settlement timing only, and a case-reserve adequacy review that lifts reported losses in AY 2020 and AY 2024 without touching paid.</p>
+  <p>The triangle set and the way they are read follow Friedland, <em>Estimating Unpaid Claims Using Basic Techniques</em>, chapter 6: paid and reported losses, reported and closed counts, the paid-to-reported ratio, the closed-to-reported (disposal) ratio, and the three averages. Friedland's warning that a stable paid-to-reported ratio does not mean nothing is changing is the hidden-volatility case here. This is a synthetic Commercial Auto Liability book of around 700 claims with annual development, built so that the effects a reserving actuary meets in practice are all present and overlap: an underlying 4% severity trend; social inflation building on the last three calendar years (CY 2023 +5%, CY 2024 +8%, CY 2025 +12%) and biting hardest on litigated files; a 2020 court-closure slow-down with its 2021 catch-up; a 2025 fast-track programme closing small claims a year early; a 2025 reserve adequacy review lifting open case reserves by 20 to 35%; a heavy severity tail that drops large losses into random cells and keeps paying on them for years; and subrogation recoveries on a few percent of closed files. Column norms are built from the other accident years with every tagged movement stripped out, so each driver is measured against clean development.</p>
 </footer>
 </div>
 

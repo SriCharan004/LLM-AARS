@@ -34,8 +34,10 @@ function int(v){ return v==null?'':String(v); }
 function ratio(v){ return v==null?'':v.toFixed(3); }
 function f4(v){ return v==null?'':v.toFixed(3); }
 function pct(v){ return (v>=0?'+':'−')+(Math.abs(v)*100).toFixed(1)+'%'; }
-const DNAME = {inflation:'Emerging inflation', large_loss:'Large-loss outlier', recovery:'One-time recovery', speedup:'Settlement speed-up', strengthening:'Case reserve strengthening', residual:'Unexplained residual', routine:'Routine'};
-const DKEYS = ['inflation','large_loss','recovery','speedup','strengthening'];
+const DNAME = {inflation:'Emerging inflation', large_loss:'Large-loss outlier', recovery:'One-time recovery', speedup:'Settlement speed-up', strengthening:'Case reserve strengthening', slowdown:'Settlement slow-down', residual:'Unexplained residual', routine:'Routine'};
+const DKEYS = ['inflation','large_loss','recovery','speedup','strengthening','slowdown'];
+const DSHORT = {inflation:'Inflation', large_loss:'Large loss', recovery:'Recovery', speedup:'Speed-up', strengthening:'Strengthening', slowdown:'Slow-down', residual:'Unexplained'};
+const DNATURE = {inflation:'recurring: costs per claim are rising and will keep rising', large_loss:'one-off: a single outsize file, handled through the large-loss load', recovery:'one-off: a credit that will not repeat', speedup:'timing only: money paid earlier than the historical pattern, no change in amount', strengthening:'basis change: reserves raised with no new claim information', slowdown:'timing only: payments deferred by a process interruption, caught up later'};
 const FLAGNAME = {spike:'Spike', drop:'Drop', hidden:'Hidden volatility'};
 function flagClass(f){ return f==='hidden'?'hidden-flag':(f||''); }
 
@@ -91,6 +93,52 @@ function columnWaterfall(k,d,aiLdf){
   if(aiLdf!=null){ const xa=x(aiLdf); svg+=`<line x1="${xa}" y1="24" x2="${xa}" y2="${H-30}" stroke="var(--accent)" stroke-width="2" stroke-dasharray="5 3"/><text x="${xa}" y="18" font-size="11" text-anchor="middle" fill="var(--accent)" font-family="var(--font-display)" font-weight="600">AI recommends ${Number(aiLdf).toFixed(3)}</text>`; }
   return svg+'</svg>';
 }
+// ---------- column driver map (AY x driver) ----------
+function driverMap(k,d){
+  const rows=[]; let maxAbs=0.0001;
+  AYS.forEach((ay,i)=>{
+    const c=cellInfo(k,i,d); if(!c) return;
+    const base=T[k][i][d]; const cells={}; DKEYS.forEach(p=>cells[p]={v:0,claims:[]});
+    B.claims.forEach(cl=>{ if(cl.ay!==ay) return; cl.events.forEach(e=>{ if(e.dev!==d+1) return; const amt=k==='paid'?e.amt:e.amtInc; if(!amt) return; cells[e.driver].v+=amt/base; const note=(cl.notes.find(n=>n.dev===d+1&&n.driver===e.driver)||{}).text||''; cells[e.driver].claims.push({id:cl.id,amt,note,status:cl.status[d+1]}); }); });
+    const explained=DKEYS.reduce((a,p)=>a+cells[p].v,0);
+    const resid=c.observed-c.baseline-explained;
+    // residual: claims with movement in the period but no tagged event
+    const key2=k==='paid'?'paid':'incurred';
+    const untagged=B.claims.filter(cl=>cl.ay===ay&&!cl.events.some(e=>e.dev===d+1)).map(cl=>({id:cl.id,amt:(cl[key2][d+1]??0)-(cl[key2][d]??0),note:(cl.notes.find(n=>n.dev===d+1)||{}).text||'',status:cl.status[d+1]})).filter(x=>x.amt).sort((a,b)=>Math.abs(b.amt)-Math.abs(a.amt));
+    cells.residual={v:resid,claims:untagged,resid:true};
+    Object.values(cells).forEach(x=>{ maxAbs=Math.max(maxAbs,Math.abs(x.v)); });
+    rows.push({ay,i,obs:c.observed,base:c.baseline,cells,open:ay===AYS[state.sel?state.sel.i:-1]});
+  });
+  return {rows,maxAbs};
+}
+function hmCell(v,maxAbs,n,extra){
+  const pctv=Math.min(1,Math.abs(v)/maxAbs); const alpha=Math.round(8+pctv*72);
+  const tok=v>0?'--spike':'--drop'; const bg=Math.abs(v)<0.0005?'transparent':`color-mix(in srgb, var(${tok}) ${alpha}%, var(--surface))`;
+  const fg=pctv>0.55?'#fff':'var(--ink)';
+  return `<td class="hm ${n?'c':''}" style="background:${bg};color:${fg}" ${extra||''}>${Math.abs(v)<0.0005?'<span class="muted">·</span>':((v>=0?'+':'−')+Math.abs(v).toFixed(3))}${n?`<small>${n} claim${n>1?'s':''}</small>`:''}</td>`;
+}
+function driverMapTable(k,d){
+  const dm=driverMap(k,d); const cols=DKEYS.concat(['residual']);
+  let h='<div style="overflow-x:auto"><table class="xtri hmap"><thead><tr><th>Acc. year</th><th>Observed</th><th>Norm</th>'+cols.map(p=>`<th title="${DNAME[p]}"><span class="dchip"><i style="background:var(--d-${p})"></i>${DSHORT[p]}</span></th>`).join('')+'</tr></thead><tbody>';
+  dm.rows.forEach(r=>{ h+=`<tr class="${r.open?'cur':''}"><td>${r.ay}${r.open?' <span class="muted small">(open)</span>':''}</td><td class="num">${r.obs.toFixed(3)}</td><td class="num muted">${r.base.toFixed(3)}</td>`;
+    cols.forEach(p=>{ const x=r.cells[p]; const n=x.claims.length; h+=hmCell(x.v,dm.maxAbs,n,`data-ay="${r.ay}" data-drv="${p}" title="AY ${r.ay} · ${DNAME[p]}: ${(x.v>=0?'+':'−')+Math.abs(x.v).toFixed(4)} of the factor · ${n} claim${n===1?'':'s'}. Click to list them."`); });
+    h+='</tr>'; });
+  // weighted column total per driver
+  let tot={}; cols.forEach(p=>tot[p]=0); let m=0; dm.rows.forEach(r=>{ const w=T[k][r.i][d]; m+=w; cols.forEach(p=>tot[p]+=r.cells[p].v*w); });
+  h+='<tr class="avg"><td>Column (vol-wtd)</td><td></td><td></td>'+cols.map(p=>{ const v=m?tot[p]/m:0; return `<td class="num">${Math.abs(v)<0.0005?'·':(v>=0?'+':'−')+Math.abs(v).toFixed(3)}</td>`; }).join('')+'</tr>';
+  return h+'</tbody></table></div>';
+}
+function driverClaims(k,d,ay,drv){
+  const dm=driverMap(k,d); const r=dm.rows.find(x=>x.ay===ay); if(!r) return '';
+  const x=r.cells[drv]; const base=T[k][r.i][d]; const list=x.claims.slice().sort((a,b)=>Math.abs(b.amt)-Math.abs(a.amt));
+  const totAmt=list.reduce((a,c)=>a+c.amt,0);
+  let h=`<div class="hm-detail"><div class="toolbar"><h4>AY ${ay} · ${DNAME[drv]} · ${list.length} claim${list.length===1?'':'s'} · ${(x.v>=0?'+':'−')+Math.abs(x.v).toFixed(3)} of the factor (${moneyFull(totAmt)} on an opening ${money(base)})</h4><button type="button" class="btn quiet" id="hmClose">Close</button></div>`;
+  if(x.resid) h+=`<p class="small muted">No tagged driver explains this part of the movement. These are the untagged claims that moved in the period, largest first; if a few of them carry most of it, the residual is concentration rather than a systemic cause.</p>`;
+  if(!list.length) return h+'<p class="small muted">No claims.</p></div>';
+  h+='<div class="claims">'+list.slice(0,40).map(c=>`<div class="claim"><div class="l1"><span class="id">${c.id}</span><span class="tag" style="background:var(--d-${drv})">${DNAME[drv]}</span><span class="small muted">${c.status||''} · ${Math.round(Math.abs(c.amt)/Math.max(1,Math.abs(totAmt))*100)}% of this cell</span></div><span class="amt">${moneyFull(c.amt)}</span>${c.note?`<div class="note">${c.note}</div>`:''}</div>`).join('')+'</div>';
+  if(list.length>40) h+=`<p class="small muted">Showing the 40 largest of ${list.length}.</p>`;
+  return h+'</div>';
+}
 function factorSet(k){
   const out=[]; for(let d=0;d<NDEV-1;d++){ const cs=columnSel(k,d); out.push({d, unadj:cs.unadj, adj:cs.adj}); }
   // cumulative to ultimate (tail 1.000)
@@ -112,6 +160,7 @@ const SIGS=[
   {name:'Severity change: large loss', exp:{paid:'↑',rep:'↑',cnt:'→',closed:'→'}, conc:true, read:'The same shape as inflation, but one or two files carry most of the excess. One-off; treat separately.'},
   {name:'Settlement speed-up', exp:{paid:'↑',rep:'→',closed:'↑',p2r:'↑'}, read:'Money moves earlier, totals do not. Revise the payment pattern, not the ultimate.'},
   {name:'Case reserve strengthening', exp:{paid:'→',rep:'↑',closed:'→',p2r:'↓',avgcase:'↑'}, read:'Reported rises with no paid movement. Restate history to the new adequacy basis (Berquist-Sherman) before using the reported method.'},
+  {name:'Settlement slow-down', exp:{paid:'↓',rep:'→',closed:'↓',p2r:'↓'}, read:'Money moves later, totals do not. Expect a catch-up in the following period; adjust the pattern, not the ultimate.'},
   {name:'Reporting change / frequency', exp:{cnt:'↑',rep:'↑'}, read:'More claims, not costlier claims. Check exposure and reporting lag.'},
   {name:'Nothing visible: offsetting or random', exp:{paid:'→',rep:'→',cnt:'→',closed:'→'}, read:'The triangles are quiet. Only the claim notes can say whether that quiet is real.'},
 ];
@@ -130,7 +179,7 @@ function matchSig(sig, c){
 // ---------- feed ----------
 function verdict(c, tri){
   const p=c.parts, keys=Object.keys(p);
-  if(c.flag==='hidden') return `Net factor looks stable (${f4(c.observed)} vs ${f4(c.baseline)}) but notes carry ${pct(p.inflation||0)} inflation against ${pct(p.recovery||0)} recovery. Gross movement ${(c.gross*100).toFixed(0)}%.`;
+  if(c.flag==='hidden'){ const pos=keys.filter(k=>p[k]>0).map(k=>`${pct(p[k])} ${DNAME[k].toLowerCase()}`).join(', '); const neg=keys.filter(k=>p[k]<0).map(k=>`${pct(p[k])} ${DNAME[k].toLowerCase()}`).join(', '); return `Net factor looks stable (${f4(c.observed)} vs ${f4(c.baseline)}) but the notes carry ${pos}${neg?` against ${neg}`:''}. Gross movement ${(c.gross*100).toFixed(0)}%.`; }
   if(!keys.length) return `No driver found in the notes. Movement is concentrated in a few claims; treat as random variation unless the pattern repeats.`;
   const tot=keys.reduce((a,k)=>a+Math.abs(p[k]),0);
   const parts=keys.sort((a,b)=>Math.abs(p[b])-Math.abs(p[a])).map(k=>`${Math.round(Math.abs(p[k])/tot*100)}% ${DNAME[k].toLowerCase()}`).join(' + ');
@@ -264,36 +313,33 @@ function waterfall(c){
   return svg+'</svg>';
 }
 function reading(c, act, tri){
-  const p=c.parts; const out=[];
-  const ay=c.ay, span=`${DL[c.dev]}→${DL[c.dev+1]} months`; const tn=TD[tri].name.toLowerCase();
-  if(c.flag==='hidden'){
-    out.push(`<p>The ${tn} factor for AY ${ay} at ${span} is ${f4(c.observed)}, close to the column norm of ${f4(c.baseline)}. Read from the triangle alone, this cell is unremarkable, and the paid-to-reported ratio is stable too.</p>`);
-    out.push(`<p>The claim notes say otherwise. ${pct(p.inflation)} of the opening balance is medical, repair and settlement inflation spread across ${act.filter(x=>x.driver==='inflation').length} open claims, and it is cancelled by a ${pct(p.recovery)} subrogation recovery on a single large file that will not recur. Gross movement is ${(c.gross*100).toFixed(0)}% against a net of ${pct(c.observed-c.baseline)}. This is the case Friedland warns about: offsetting changes leave the ratios flat.</p>`);
-    out.push(`<p><strong>Suggested ${f4(c.suggested)}.</strong> Strip the recovery, keep the inflation. Carrying the observed ${f4(c.observed)} would understate the reserve for this and later accident years.</p>`);
-  } else if(p.speedup){
-    out.push(`<p>The paid factor for AY ${ay} at ${span} is ${f4(c.observed)} against a norm of ${f4(c.baseline)}. On the paid triangle alone this reads as worsening experience.</p>`);
-    out.push(`<p>Notes on ${act.filter(x=>x.driver==='speedup').length} files reference the 2025 fast-track settlement programme. Those claims paid at their case reserve, about a year earlier than the historical pattern. The reported factor for the same cell barely moves, closed counts and the disposal rate jump, and the paid-to-reported ratio rises: the signature of a timing change, not a severity change.</p>`);
-    out.push(`<p><strong>Suggested ${f4(c.suggested)}.</strong> Remove the ${pct(p.speedup)} timing effect; carry the baseline plus the small inflation signal${p.inflation?` (${pct(p.inflation)})`:''}. A payment pattern this fast will persist if the programme continues, so the paid method needs a revised pattern (Berquist-Sherman settlement-rate adjustment) rather than a higher factor.</p>`);
-  } else if(p.strengthening){
-    out.push(`<p>The reported factor for AY ${ay} at ${span} is ${f4(c.observed)} against a norm of ${f4(c.baseline)}, while the paid factor for the same cell is on its norm. Average case outstanding is up and the paid-to-reported ratio is down.</p>`);
-    out.push(`<p>Notes on ${act.filter(x=>x.driver==='strengthening').length} open files cite the 2025 reserve adequacy initiative: case reserves were raised with no new information on the claims. The movement is a change of reserving basis, not a change in expected cost. Because it hits every open accident year in the same calendar year, the same effect appears down the CY 2025 diagonal.</p>`);
-    out.push(`<p><strong>Suggested ${f4(c.suggested)}.</strong> Do not carry the strengthened factor forward: reserves set on the new basis will develop less than history suggests. Restate the historical case reserves to the current adequacy level (Berquist-Sherman) before selecting reported factors, or rely on the paid method for this period.</p>`);
-  } else if(p.inflation && p.large_loss){
-    const tot=p.inflation+p.large_loss;
-    out.push(`<p>The ${tn} factor for AY ${ay} at ${span} is ${f4(c.observed)} against a norm of ${f4(c.baseline)}. Paid and reported move together and counts are flat, so this is a severity change. A reviewer who stops at the largest claim would attribute the spike to the ${moneyFull(act.find(x=>x.driver==='large_loss')?.inc||0)} verdict and move on.</p>`);
-    out.push(`<p>That verdict explains only ${Math.round(p.large_loss/tot*100)}% of the excess. The other ${Math.round(p.inflation/tot*100)}% is inflation across ${act.filter(x=>x.driver==='inflation').length} ordinary files: fee-schedule drift, repair-cost increases and plaintiff demands anchored to recent verdicts. The same language appears on the AY 2021 and AY 2023 diagonals, which makes it systemic.</p>`);
-    out.push(`<p><strong>Suggested ${f4(c.suggested)}.</strong> Strip the one-off verdict, keep the inflation, and extend the inflation signal to the other open accident years.</p>`);
-  } else if(p.large_loss){
-    out.push(`<p>The ${tn} factor for AY ${ay} at ${span} is ${f4(c.observed)} against ${f4(c.baseline)}. The whole excess is one catastrophic loss paid at policy limits; no other file in the cell shares the fact pattern.</p>`);
-    out.push(`<p><strong>Suggested ${f4(c.suggested)}.</strong> Treat the large loss separately (large-loss load or reinsurance recovery) and carry the baseline.</p>`);
-  } else if(Object.keys(p).length===0){
-    const top=c.movers.slice(0,3), share=c.incr?top.reduce((a,m)=>a+m.amt,0)/c.incr:0;
-    out.push(`<p>The ${tn} factor for AY ${ay} at ${span} is ${f4(c.observed)} against ${f4(c.baseline)}. None of the notes in this cell reference inflation, settlement-process change, a reserve review, recoveries or an outsize verdict.</p>`);
-    out.push(`<p>${top.length?`The three largest movers (${top.map(m=>m.id).join(', ')}) account for ${Math.round(share*100)}% of the movement.`:''} With no systemic driver in the text, the reading is random variation in a small cell.</p>`);
-    out.push(`<p><strong>Suggested ${f4(c.suggested)}.</strong> Carry the baseline; flag the cell for re-check at the next valuation.</p>`);
+  const p=c.parts; const out=[]; const ay=c.ay, span=`${DL[c.dev]}→${DL[c.dev+1]} months`; const tn=TD[tri].name.toLowerCase();
+  const keys=Object.keys(p).sort((a,b)=>Math.abs(p[b])-Math.abs(p[a]));
+  const nOf=k=>act.filter(x=>x.driver===k).length;
+  const sg=signals(AYS.indexOf(ay),c.dev); const m=matchSig(sg,c); const best=m.best&&m.best.score>0?m.best.s.name:null;
+  const dev=c.observed-c.baseline;
+  // 1. what the triangle shows
+  if(c.flag==='hidden') out.push(`<p>The ${tn} factor for AY ${ay} at ${span} is ${f4(c.observed)}, within range of the clean norm of ${f4(c.baseline)}. Read from the triangle alone this cell is unremarkable${best?`; the cross-read says "${best.toLowerCase()}"`:''}.</p>`);
+  else out.push(`<p>The ${tn} factor for AY ${ay} at ${span} is ${f4(c.observed)} against a clean norm of ${f4(c.baseline)} (${pct(dev/c.baseline)}).${best?` The other triangles match the signature of ${best.toLowerCase()}.`:''}</p>`);
+  // 2. what the notes attribute
+  if(keys.length){
+    const items=keys.map(k=>`${DNAME[k].toLowerCase()} ${pct(p[k])} on ${nOf(k)} file${nOf(k)===1?'':'s'} (${DNATURE[k]})`);
+    out.push(`<p>The notes attribute the movement to ${items.join('; ')}. ${Math.abs(c.residual)>=0.02?`A residual of ${pct(c.residual)} is not explained by any note${c.movers&&c.movers.length?`; the largest untagged movers are ${c.movers.slice(0,2).map(x=>x.id).join(' and ')}`:''}.`:'The residual is small, so the notes account for the cell.'}</p>`);
+    if(c.flag==='hidden') out.push(`<p>Gross movement is ${(c.gross*100).toFixed(0)}% against a net of ${pct(dev)}: offsetting drivers are cancelling in the net factor, which is the case Friedland warns about when a stable ratio hides change.</p>`);
   } else {
-    out.push(`<p>Factor ${f4(c.observed)} against ${f4(c.baseline)}. Drivers: ${Object.keys(p).map(k=>`${DNAME[k].toLowerCase()} ${pct(p[k])}`).join(', ')}.</p><p><strong>Suggested ${f4(c.suggested)}.</strong></p>`);
+    const top=c.movers.slice(0,3), share=c.incr?top.reduce((a,x)=>a+x.amt,0)/c.incr:0;
+    out.push(`<p>None of the notes dated to this period reference inflation, a settlement-process change, a reserve review, a recovery or an outsize loss.${top.length?` The three largest movers (${top.map(x=>x.id).join(', ')}) account for ${Math.round(share*100)}% of the movement.`:''} With no systemic driver in the text, the reading is random variation.</p>`);
   }
+  // 3. what to carry
+  const rec=keys.filter(k=>DRV[k].recurring), one=keys.filter(k=>!DRV[k].recurring);
+  let carry=`<strong>Suggested ${f4(c.suggested)}.</strong> `;
+  if(one.length&&rec.length) carry+=`Strip the one-off movements (${one.map(k=>DNAME[k].toLowerCase()).join(', ')}) and keep the recurring ${rec.map(k=>DNAME[k].toLowerCase()).join(', ')}.`;
+  else if(rec.length) carry+=`Carry the recurring ${rec.map(k=>DNAME[k].toLowerCase()).join(', ')} on top of the clean norm; expect the same signal in other open accident years.`;
+  else if(one.length) carry+=`Strip the one-off movements (${one.map(k=>DNAME[k].toLowerCase()).join(', ')}) and carry the clean norm.`;
+  else carry+=`Carry the clean norm and re-check the cell at the next valuation.`;
+  if(p.speedup||p.slowdown) carry+=` A timing change this size calls for a revised payment pattern (Berquist-Sherman settlement-rate adjustment) rather than a factor change.`;
+  if(p.strengthening) carry+=` Reserves set on the new adequacy basis will develop less than history suggests: restate prior case reserves to the current level before selecting reported factors.`;
+  out.push(`<p>${carry}</p>`);
   return out.join('');
 }
 function crossStrip(i,d){
@@ -372,6 +418,9 @@ function renderDrill(){
         <tr><td>Adjusted, last 5 years</td><td></td><td></td><td class="num">${cs.adjLast5==null?'·':cs.adjLast5.toFixed(3)}</td><td></td></tr>
         <tr><td>Adjusted, simple average</td><td></td><td></td><td class="num">${cs.simpleAdj==null?'·':cs.simpleAdj.toFixed(3)}</td><td></td></tr></tfoot></table></div></div>
       <div class="stack"><h4>From unadjusted average to AARS-adjusted LDF</h4>${columnWaterfall(triK,d,cai&&cai.suggested_ldf?Number(cai.suggested_ldf):null)}<div class="stats"><div class="stat"><span class="eyebrow">Unadjusted</span><span class="v">${cs.unadj.toFixed(3)}</span></div><div class="stat"><span class="eyebrow">AARS-adjusted</span><span class="v sugg">${cs.adj.toFixed(3)}</span></div>${cai&&cai.suggested_ldf?`<div class="stat"><span class="eyebrow">AI recommends</span><span class="v">${Number(cai.suggested_ldf).toFixed(3)}</span></div>`:''}</div></div></div>
+      <div class="stack"><h4>Who is driving each year: claims by driver across the column</h4>
+        <p class="small muted">Each cell is a driver's contribution to that accident year's factor, in factor points, with the number of claims behind it. Amber adds to the factor, blue reduces it; the last column is what the notes did not explain. Click a cell to list its claims.</p>
+        ${driverMapTable(triK,d)}<div id="hmDetail">${state.hm&&state.hm.k===triK&&state.hm.d===d?driverClaims(triK,d,state.hm.ay,state.hm.drv):''}</div></div>
       <div class="two"><div class="stack ai"><div class="ai-bar"><h4>AI column memo</h4><div style="display:flex;gap:8px"><button type="button" class="btn ghost" id="colAiBtn">Write column memo</button><button type="button" class="btn quiet" id="colAiStop" hidden>Stop</button></div></div>
         <div class="ai-out" id="colAiOut">${cai?renderColAI(cai):'<p class="status" id="colAiStatus">Not run yet for this column.</p>'}</div></div>
         <div class="stack decision"><h4>Column factor to carry</h4><fieldset>
@@ -428,6 +477,8 @@ Rows (JSON): ${JSON.stringify(rows)}
 Reply with only a JSON object: {"suggested_ldf": <number>, "basis": "<which average or judgement, <=8 words>", "memo": "<=150 words: which years carry one-off movements and what was stripped, whether a recurring driver is present and should be carried forward, which average you would select and why, and what to watch at the next valuation. Plain sentences, no bullet points."}`;
 }
 function wireColumn(triK,d,i){
+  document.querySelectorAll('table.hmap td.c').forEach(td=>td.onclick=()=>{ state.hm={k:triK,d,ay:+td.dataset.ay,drv:td.dataset.drv}; const box=document.getElementById('hmDetail'); box.innerHTML=driverClaims(triK,d,state.hm.ay,state.hm.drv); document.querySelectorAll('table.hmap td.c').forEach(x=>x.classList.toggle('sel',x===td)); const cl=document.getElementById('hmClose'); if(cl) cl.onclick=()=>{ state.hm=null; box.innerHTML=''; document.querySelectorAll('table.hmap td.c').forEach(x=>x.classList.remove('sel')); }; });
+  const cl0=document.getElementById('hmClose'); if(cl0) cl0.onclick=()=>{ state.hm=null; document.getElementById('hmDetail').innerHTML=''; document.querySelectorAll('table.hmap td.c').forEach(x=>x.classList.remove('sel')); };
   const ckey='col:'+triK+':'+d; const btn=document.getElementById('colAiBtn'), stop=document.getElementById('colAiStop'), out=document.getElementById('colAiOut'); if(!btn) return;
   getSample().then(s=>{ if(!s){ btn.disabled=true; btn.textContent=PRE[ckey]?'Pre-run memo shown':'AI memo unavailable here'; } else if(PRE[ckey]&&!state.ai[ckey]) btn.textContent='Write column memo live'; });
   let ctl=null; stop.onclick=()=>ctl&&ctl.abort();
@@ -487,12 +538,13 @@ Driver codes:
 - "recovery": subrogation, salvage or other one-time credit reducing paid loss. One-off.
 - "speedup": settlement made earlier than the historical pattern (fast-track, early-resolution programme) with no change to the amount. Timing only.
 - "strengthening": case reserve raised because of a reserve adequacy review or new reserving guideline, with no new information on the claim. Change of basis, not of expected cost.
+- "slowdown": payment deferred by a process interruption (court closures, backlog) with the amount unchanged, or the later catch-up of such a deferral. Timing only.
 - "routine": ordinary claim handling with no cost-level signal.
 
 Notes (JSON): ${JSON.stringify(slice)}
 
 Reply with only a JSON object of this shape:
-{"notes":[{"id":"CA-...","driver":"inflation|large_loss|recovery|speedup|strengthening|routine","why":"<=12 words"}],
+{"notes":[{"id":"CA-...","driver":"inflation|large_loss|recovery|speedup|strengthening|slowdown|routine","why":"<=12 words"}],
  "systemic": true|false,
  "treatment": "accept observed|strip one-offs|adjust pattern|restate case reserves|investigate",
  "suggested_ldf": <number>,

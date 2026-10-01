@@ -22,10 +22,13 @@ memos) ship with the page in `data/prerun.json`; the app makes no network calls 
 
 ## Layout
 
+The app has no sidebar: the page fills the window and scrolls as itself.
+
+
     app.py                 Streamlit shell: serves the page
     assets/head.html       page markup and styles
     assets/script.html     page logic (triangles, signatures, waterfall, decision log)
-    data/book.json         synthetic claim-level book (744 claims, AY 2016–2025, valued 31 Dec 2025)
+    data/book.json         synthetic claim-level book (711 claims, AY 2016–2025, valued 31 Dec 2025)
     data/prerun.json       stored AI readings: flagged cells and column memos (Claude, 2026-10-01)
     generate_book.py       regenerates data/book.json with the seeded effects
 
