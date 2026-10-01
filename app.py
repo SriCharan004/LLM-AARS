@@ -18,19 +18,18 @@ ROOT = Path(__file__).parent
 ASSETS, DATA = ROOT / "assets", ROOT / "data"
 
 st.set_page_config(page_title="LLM-AARS Triangle Diagnostics", page_icon="📐", layout="wide",
-                   initial_sidebar_state="expanded")
+                   initial_sidebar_state="collapsed")
 
-# Strip Streamlit chrome so the page owns the canvas.
+# No sidebar, no Streamlit chrome: the page owns the whole window and scrolls as itself.
 st.markdown(
     """
     <style>
-      #MainMenu, footer, header[data-testid="stHeader"] {visibility: hidden; height: 0;}
-      .block-container {padding: 0 !important; max-width: 100% !important;}
-      section[data-testid="stSidebar"] {min-width: 300px;}
-      /* the page fills the viewport and scrolls inside its own frame */
-      div[data-testid="stAppViewContainer"] > section.main {overflow: hidden;}
-      iframe[title="st.iframe"], div[data-testid="stIFrame"] iframe {border: 0; width: 100% !important; height: 100vh !important; display: block;}
-      div[data-testid="element-container"], div[data-testid="stIFrame"], div[data-testid="stVerticalBlock"] {gap: 0 !important;}
+      #MainMenu, footer, header[data-testid="stHeader"] {display: none !important;}
+      section[data-testid="stSidebar"], div[data-testid="collapsedControl"] {display: none !important;}
+      div[data-testid="stAppViewContainer"], section[data-testid="stMain"], section.main {margin: 0 !important; padding: 0 !important; width: 100vw !important; max-width: 100vw !important; left: 0 !important;}
+      .block-container {padding: 0 !important; margin: 0 !important; max-width: 100vw !important; width: 100vw !important;}
+      div[data-testid="stVerticalBlock"], div[data-testid="element-container"], div[data-testid="stIFrame"] {gap: 0 !important; width: 100% !important;}
+      iframe {border: 0; display: block; width: 100vw !important; height: 100vh !important;}
     </style>
     """,
     unsafe_allow_html=True,
@@ -52,47 +51,12 @@ def load_page() -> tuple[str, dict, dict]:
         "<style>:root{color-scheme:light}body{margin:0;font:14px system-ui,sans-serif;background:#f7f6f3}"
         "img{max-width:100%}[hidden]{display:none!important}"
         # inside Streamlit the page owns the whole main area: use the full width with even gutters
-        ".wrap{max-width:none!important}body{padding-inline:24px!important}"
+        ".wrap{max-width:1680px!important}body{padding-inline:24px!important}"
         "</style></head><body>" + page + "</body></html>"
     )
     return html, book, prerun
 
 
 HTML, BOOK, PRERUN = load_page()
-DL = BOOK["meta"]["devLabels"]
-TRI_NAME = {"paid": "Paid losses", "incurred": "Reported losses"}
 
-with st.sidebar:
-    st.markdown("### LLM-AARS")
-    st.caption("Triangle diagnostics with claim-note attribution. "
-               f"{len(BOOK['claims'])} synthetic Commercial Auto claims, AY 2016–2025, valued 31 Dec 2025.")
-
-    st.markdown("#### How to use the page")
-    st.markdown(
-        "1. Start with the **diagnostic feed** and the **diagonal test**.\n"
-        "2. Click a flagged cell (or any factor in a triangle) to open it.\n"
-        "3. Read the **signature table**, the **waterfall** and the **AI reading**.\n"
-        "4. Review the **column selection**: unadjusted vs AARS-adjusted LDF.\n"
-        "5. Record the cell and column decisions; the log is the sign-off record."
-    )
-
-    cell_keys = [k for k in PRERUN if not k.startswith("col:")]
-    col_keys = [k for k in PRERUN if k.startswith("col:")]
-    st.markdown("#### Stored AI readings")
-    st.caption("Produced by Claude on 2026-10-01 and shipped with the page.")
-    for k in cell_keys:
-        tri, rest = k.split(":")
-        ay, d = rest.split("-")
-        d = int(d)
-        st.write(f"• AY {ay} · {DL[d]}→{DL[d + 1]} mo · {TRI_NAME[tri]}")
-    st.markdown("**Column memos**")
-    for k in col_keys:
-        _, tri, d = k.split(":")
-        d = int(d)
-        st.write(f"• {DL[d]}→{DL[d + 1]} mo · {TRI_NAME[tri]}")
-
-    st.markdown("---")
-    st.caption("All claims, notes and amounts are synthetic. The triangle set and the way it is read follow "
-               "Friedland, Estimating Unpaid Claims Using Basic Techniques, chapter 6.")
-
-components.html(HTML, height=1200, scrolling=True)
+components.html(HTML, height=1400, scrolling=True)
